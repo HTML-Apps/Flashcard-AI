@@ -1,24 +1,34 @@
-const CACHE_NAME = "Flashcard-AI_v2";
+// sw.js - Gemergte & optimierte Version für Flashcard-AI
+const CACHE_NAME = "Flashcard-AI_v3"; // Version erhöht für sauberes Client-Update
 
+// Assets, die für den vollständigen Offline-Betrieb zwingend benötigt werden
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",
-  "./brain.png"
+  "./manifest.json",
+  "./brain.png",
+  
+  // Externe CDNs (Sicherheitsnetz für Offline-Modus)
+  "https://cdn.tailwindcss.com",
+  "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
+  "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css",
+  "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"
 ];
 
-// 1. Installieren: Dateien in den Cache laden
+// 1. Installieren: Core-Assets & CDNs direkt in den Cache laden
 self.addEventListener("install", (event) => {
-  // forceer das sofortige Übernehmen des neuen Workers
+  // Erzwingt das sofortige Übernehmen des neuen Workers (aus deinem originalen Code)
   self.skipWaiting();
+  
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log("[Service Worker] Caching neue Version:", CACHE_NAME);
+      console.log("[Service Worker] Caching Core-Assets & CDNs für Version:", CACHE_NAME);
       return cache.addAll(ASSETS_TO_CACHE);
     })
   );
 });
 
-// 2. Aktivieren: Alte Caches (v1, etc.) löschen
+// 2. Aktivieren: Alte Cache-Versionen aufräumen
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keyList) => {
@@ -32,32 +42,70 @@ self.addEventListener("activate", (event) => {
       );
     })
   );
-  // Übernimmt sofort die Kontrolle über alle offenen Tabs
+  // Übernimmt sofort die Kontrolle über alle offenen Tabs (aus deinem originalen Code)
   return self.clients.claim();
 });
 
-// 3. Fetch: Netzwerk-Priorität (Network First, Falling Back to Cache)
+// 3. Fetch: Intelligente Hybrid-Strategie (Network-First + Cache-First für Statics)
 self.addEventListener("fetch", (event) => {
-  // Firebase/Firestore/Vercel API Anfragen immer ignorieren (Live-Daten)
-  if (event.request.url.includes("firestore") || 
-      event.request.url.includes("googleapis") || 
-      event.request.url.includes("/api/")) {
+  // Externe APIs und Live-Daten von Drittanbietern immer ignorieren (aus deinem originalen Code)
+  if (
+    event.request.url.includes("firestore") || 
+    event.request.url.includes("googleapis") || 
+    event.request.url.includes("/api/")
+  ) {
     return;
   }
 
+  const url = new URL(event.request.url);
+
+  // ── STRATEGIE A: Cache-First für Core-Assets & CDN-Bibliotheken ──────────────
+  // Garantiert, dass schwergewichtige CDNs (wie Tailwind) ohne Netz-Verzögerung sofort laden
+  const isStaticAsset = ASSETS_TO_CACHE.some(asset => {
+    // Normalisiere Pfade für den Abgleich
+    const cleanAsset = asset.replace("./", "");
+    return event.request.url.includes(cleanAsset);
+  });
+
+  if (isStaticAsset) {
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        // Fallback aufs Netzwerk, falls ein statisches Asset noch nicht im Cache war
+        return fetch(event.request);
+      })
+    );
+    return;
+  }
+
+  // ── STRATEGIE B: Network-First mit Cache-Fallback ───────────────────────────
+  // Deine bevorzugte Strategie für alle übrigen, dynamischen App-Inhalte
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        // Wenn Netzwerk-Antwort OK, Kopie in den Cache legen (optional)
-        // und die Antwort zurückgeben
-        return caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, response.clone());
-          return response;
-        });
+        // Wenn die Netzwerk-Antwort OK ist, eine Kopie für Offline-Zwecke in den Cache legen
+        if (response && response.status === 200 && event.request.method === "GET" && url.origin === self.location.origin) {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+        }
+        return response;
       })
       .catch(() => {
-        // Wenn das Netzwerk fehlschlägt, nimm die Version aus dem Cache
-        return caches.match(event.request);
+        // Wenn das Netzwerk fehlschlägt (Offline-Modus), nimm die Version aus dem Cache
+        return caches.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          
+          // Zusätzlicher Schutz: Wenn eine ganze Seite aufgerufen wird (Navigation) und offline ist
+          if (event.request.mode === "navigate") {
+            return caches.match("./index.html") || caches.match("/");
+          }
+        });
       })
   );
 });
