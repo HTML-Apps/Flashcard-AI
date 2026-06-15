@@ -8,15 +8,17 @@
 //   KV_REST_API_TOKEN        – Upstash KV token (für Lizenz-Keys)
 //   SECRET_MASTER_KEY        – Dein eigener Test-Key (unbegrenzte Scans)
 
+import crypto from 'crypto';
+
 // ── Vercel Body-Size-Limit (wichtig für Base64-Bilder!) ────────────────────
 export const config = {
   api: { bodyParser: { sizeLimit: '4mb' } },
 };
 
-const FREE_TRIAL_LIMIT = 5;
+const FREE_TRIAL_LIMIT      = 5;
+const POLICY_COOLDOWN_SEC   = 900; // 15 Minuten Cooldown statt permanenter Ban
 
 // ── System-Prompt für OpenAI ───────────────────────────────────────────────
-// WICHTIG: Hier wurde das Format auf ein JSON-Objekt mit dem Key "flashcards" umgestellt.
 const SYSTEM_PROMPT = `Du bist ein präziser Daten-Extraktor und didaktischer Lern-Assistent für Studenten (insbesondere Medizin, Jura und MINT).
 Analysiere das hochgeladene Bild. Dies kann eine Tabelle, eine Liste, ein Vorlesungsskript, ein Fließtext oder ein Buchauszug sein.
 Ignoriere rein dekorative Elemente, Trennlinien, Icons, Seitenzahlen und irrelevante Randnotizen.
@@ -38,55 +40,105 @@ Rückgabe-Parameter:
 Gib das Ergebnis AUSSCHLIESSLICH als gültiges JSON-Objekt zurück, das ein Array namens "flashcards" enthält. Achte darauf, Anführungszeichen im Text korrekt zu escapen.
 Format: { "flashcards": [{"front": "Begriff oder Frage", "back": "Erklärung oder Antwort"}] }`;
 
-// ── Upstash Redis: INCR (für Free-Trial IP-Zähler) ────────────────────────
-async function redisIncr(key) {
-  const url   = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+// ══════════════════════════════════════════════════════════════════
+// SECURITY: Konsistentes SHA-256-Hashing (server-seitig, Node.js crypto)
+// Jeder licenseKey/IP wird VOR dem Redis-Zugriff gehasht.
+// Dadurch stimmen Blacklist-Einträge und Blacklist-Checks immer überein.
+// ══════════════════════════════════════════════════════════════════
+function hashKey(input) {
+  return crypto.createHash('sha256').update(String(input)).digest('hex');
+}
 
-  const res = await fetch(`${url}/incr/${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
+// ── Upstash Redis: Hilfsfunktionen ────────────────────────────────────────
+const REDIS_URL   = () => process.env.UPSTASH_REDIS_REST_URL;
+const REDIS_TOKEN = () => process.env.UPSTASH_REDIS_REST_TOKEN;
+
+async function redisCall(path, method = 'GET') {
+  const res = await fetch(`${REDIS_URL()}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${REDIS_TOKEN()}` },
   });
-  if (!res.ok) throw new Error(`Upstash INCR failed: ${res.status}`);
-  const json = await res.json();
-  return json.result; // number
+  if (!res.ok) throw new Error(`Redis ${method} ${path} failed: ${res.status}`);
+  return res.json();
+}
+
+// INCR – Free-Trial IP-Zähler
+async function redisIncr(key) {
+  const json = await redisCall(`/incr/${encodeURIComponent(key)}`, 'POST');
+  return json.result;
+}
+
+// SET mit optionalem TTL (EX = Sekunden)
+async function redisSet(key, value, ttlSeconds = null) {
+  const path = ttlSeconds
+    ? `/set/${encodeURIComponent(key)}/${encodeURIComponent(value)}/EX/${ttlSeconds}`
+    : `/set/${encodeURIComponent(key)}/${encodeURIComponent(value)}`;
+  await redisCall(path, 'POST');
+}
+
+// EXISTS – gibt true zurück wenn Key vorhanden
+async function redisExists(key) {
+  const json = await redisCall(`/exists/${encodeURIComponent(key)}`);
+  return json.result === 1;
+}
+
+// LPUSH + LTRIM – Security-Log (max. 500 Einträge, DSGVO-konform)
+async function redisLog(event, hashedId) {
+  const entry = JSON.stringify({
+    event,
+    hashed_id: hashedId,
+    ts: new Date().toISOString(),
+  });
+  // Beide Calls fire-and-forget – Logging darf nie den Hauptpfad blockieren
+  redisCall(`/lpush/${encodeURIComponent('security_log')}/${encodeURIComponent(entry)}`, 'POST')
+    .then(() => redisCall('/ltrim/security_log/0/499', 'POST'))
+    .catch(err => console.error('[SECURITY LOG] Fehler:', err));
 }
 
 // ── Upstash KV: GET/SET/DECR (für Lizenz-Key Scan-Konten) ─────────────────
+const KV_URL   = () => process.env.KV_REST_API_URL;
+const KV_TOKEN = () => process.env.KV_REST_API_TOKEN;
+
 async function kvGet(key) {
-  const url   = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-  const res   = await fetch(`${url}/get/${key}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const res = await fetch(`${KV_URL()}/get/${key}`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN()}` },
   });
   if (!res.ok) throw new Error(`KV GET failed: ${res.status}`);
   const json = await res.json();
-  return json.result; // string | null
+  return json.result;
 }
 
 async function kvSet(key, value) {
-  const url   = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-  await fetch(`${url}/set/${key}/${value}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  await fetch(`${KV_URL()}/set/${key}/${value}`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN()}` },
   });
 }
 
 async function kvDecr(key) {
-  const url   = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-  const res   = await fetch(`${url}/decr/${key}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const res = await fetch(`${KV_URL()}/decr/${key}`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN()}` },
   });
   if (!res.ok) throw new Error(`KV DECR failed: ${res.status}`);
   const json = await res.json();
-  return json.result; // number
+  return json.result;
 }
 
-// ── IP-Adresse des Clients ermitteln ──────────────────────────────────────
+// ── IP-Adresse: Vercel-native Header, resistent gegen X-Forwarded-For-Spoofing
+// SECURITY: x-real-ip wird von Vercel's Edge-Infrastruktur gesetzt und kann
+// vom Client nicht manipuliert werden. X-Forwarded-For als letzter Fallback.
 function getClientIp(req) {
+  // Vercel setzt diesen Header zuverlässig auf der Edge-Ebene
+  const realIp = req.headers['x-real-ip'];
+  if (realIp) return realIp.trim();
+
+  // Vercel Geo/IP-Infrastruktur-Header (bei Vercel Pro verfügbar)
+  const vercelIp = req.headers['x-vercel-forwarded-for'];
+  if (vercelIp) return vercelIp.split(',')[0].trim();
+
+  // LETZTER Fallback: x-forwarded-for (manipulierbar, aber besser als nichts)
   const forwarded = req.headers['x-forwarded-for'];
   if (forwarded) return forwarded.split(',')[0].trim();
+
   return req.socket?.remoteAddress || 'unknown';
 }
 
@@ -106,7 +158,7 @@ async function validateLemonSqueezy(licenseKey) {
 
 // ── Haupt-Handler ──────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  // CORS (wichtig wenn PWA und API auf unterschiedlichen Domains laufen)
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -126,23 +178,50 @@ export default async function handler(req, res) {
   const isFreeTrial   = !licenseKey || licenseKey === 'FREE_TRIAL';
   const isPaidLicense = !isMasterKey && !isFreeTrial;
 
-  console.log(`[API START] Key: "${licenseKey}" | Master: ${isMasterKey} | FreeTrial: ${isFreeTrial}`);
+  console.log(`[API START] Master: ${isMasterKey} | FreeTrial: ${isFreeTrial}`);
 
-  // Rückgabewerte für die Response
-  let usageCurrent   = null; // Free-Trial: aktueller IP-Zählerstand
-  let remainingScans = null; // Lizenz: verbleibende Scans (nach DECR)
+  // ════════════════════════════════════════════════════════════════
+  // SECURITY: Blacklist-Check mit konsistentem SHA-256-Hash
+  // Der licenseKey wird VOR dem Redis-Lookup gehasht, genau wie beim Eintragen.
+  // Dadurch stimmt der Vergleich immer – der Bug aus der vorherigen Version ist behoben.
+  // ════════════════════════════════════════════════════════════════
+  if (!isMasterKey) {
+    try {
+      // Identifier: Lizenzschlüssel bei paid, IP bei free trial
+      const identifier    = isFreeTrial ? getClientIp(req) : licenseKey;
+      const hashedId      = hashKey(identifier);
+      const blacklistKey  = `blacklist:${hashedId}`;
+      const isBanned      = await redisExists(blacklistKey);
+
+      if (isBanned) {
+        console.warn(`[SECURITY] Gesperrter Identifier versucht Zugriff (Hash: ${hashedId.slice(0, 8)}...)`);
+        return res.status(403).json({
+          error:   'Dein Zugang wurde temporär gesperrt. Bitte versuche es später erneut oder kontaktiere den Support.',
+          cooldown: true,
+        });
+      }
+    } catch (err) {
+      // Check-Fehler blockiert nicht den Betrieb
+      console.error('[SECURITY] Blacklist-Check fehlgeschlagen:', err);
+    }
+  }
+
+  let usageCurrent   = null;
+  let remainingScans = null;
 
   try {
 
     // ════════════════════════════════════════════════════════════════
     // A) FREE TRIAL – IP-basiertes Throttling via Redis INCR
+    //    SECURITY: IP kommt aus x-real-ip (Vercel Edge), nicht aus
+    //    dem manipulierbaren X-Forwarded-For-Header.
     // ════════════════════════════════════════════════════════════════
     if (isFreeTrial) {
       const ip       = getClientIp(req);
-      const redisKey = `free_trial_ip:${ip}`;
+      const redisKey = `free_trial_ip:${hashKey(ip)}`; // IP ebenfalls hashen
       const count    = await redisIncr(redisKey);
 
-      console.log(`[FREE TRIAL] IP: ${ip} | Zähler: ${count}/${FREE_TRIAL_LIMIT}`);
+      console.log(`[FREE TRIAL] Zähler: ${count}/${FREE_TRIAL_LIMIT}`);
 
       if (count > FREE_TRIAL_LIMIT) {
         return res.status(429).json({ error: 'LIMIT_REACHED' });
@@ -154,36 +233,31 @@ export default async function handler(req, res) {
     // B) PAID LICENSE – Lemon Squeezy + KV Scan-Konto
     // ════════════════════════════════════════════════════════════════
     if (isPaidLicense) {
-      const kvUrl   = process.env.KV_REST_API_URL;
-      const kvToken = process.env.KV_REST_API_TOKEN;
-      if (!kvUrl || !kvToken) {
+      if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
         return res.status(500).json({ error: 'Datenbank-Konfigurationsfehler.' });
       }
 
-      // KV-Eintrag lesen
       const raw     = await kvGet(`license:${licenseKey}`);
       let scansLeft = raw !== null ? parseInt(raw, 10) : null;
 
-      console.log(`[KV GET] Scans für "${licenseKey}": ${scansLeft}`);
+      console.log(`[KV GET] Scans verbleibend: ${scansLeft}`);
 
-      // Noch nicht bekannt → Lemon Squeezy validieren und 200 Scans anlegen
       if (scansLeft === null || isNaN(scansLeft)) {
-        console.log(`[LEMON SQUEEZY] Validiere Key: "${licenseKey}"...`);
+        console.log('[LEMON SQUEEZY] Validiere Key...');
         const valid = await validateLemonSqueezy(licenseKey);
 
         if (!valid) {
-          console.warn(`[BLOCKIERT] Ungültiger Key: "${licenseKey}"`);
+          console.warn('[BLOCKIERT] Ungültiger Lizenzschlüssel.');
           return res.status(403).json({ error: 'Ungültiger oder abgelaufener Lizenzschlüssel.' });
         }
 
         scansLeft = 200;
         await kvSet(`license:${licenseKey}`, scansLeft);
-        console.log(`[KV SET] 200 Scans für "${licenseKey}" angelegt.`);
+        console.log('[KV SET] 200 Scans angelegt.');
       }
 
-      // Keine Scans mehr
       if (scansLeft <= 0) {
-        console.warn(`[BLOCKIERT] Keine Scans mehr für "${licenseKey}"`);
+        console.warn('[BLOCKIERT] Keine Scans mehr verfügbar.');
         return res.status(402).json({ error: 'Deine Scans sind aufgebraucht.' });
       }
     }
@@ -196,7 +270,7 @@ export default async function handler(req, res) {
     const base64Data = image.includes(',') ? image.split(',')[1] : image;
 
     // ── OpenAI Vision aufrufen ─────────────────────────────────────
-    console.log(`[OPENAI] Sende Bild für Key: "${licenseKey}"...`);
+    console.log('[OPENAI] Sende Bild...');
 
     const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -205,9 +279,9 @@ export default async function handler(req, res) {
         Authorization:  `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model:      'gpt-4o-mini',
-        max_tokens: 2048,
-        response_format: { type: 'json_object' }, // <-- HIER IST DIE MAGIE
+        model:           'gpt-4o-mini',
+        max_tokens:      2048,
+        response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           {
@@ -217,7 +291,6 @@ export default async function handler(req, res) {
                 type:      'image_url',
                 image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: 'high' },
               },
-              // <-- User Message angepasst, damit kein Konflikt entsteht
               { type: 'text', text: 'Extrahiere die wichtigsten Konzepte oder Vokabelpaare aus diesem Bild und antworte im geforderten JSON-Format.' },
             ],
           },
@@ -225,44 +298,73 @@ export default async function handler(req, res) {
       }),
     });
 
+    // ════════════════════════════════════════════════════════════════
+    // SECURITY: OpenAI Content-Policy-Fehler → temporärer Cooldown (15 Min.)
+    // KEIN permanenter Ban, da False Positives bei Medizin/Jura-Inhalten
+    // (Dermatologie-Bilder, juristische Fallanalysen etc.) häufig vorkommen.
+    // Der Vorfall wird intern geloggt für manuelles Admin-Review.
+    // ════════════════════════════════════════════════════════════════
     if (!openAIResponse.ok) {
+      const errBody = await openAIResponse.json().catch(() => ({}));
+      const errCode = errBody?.error?.code    || '';
+      const errMsg  = errBody?.error?.message || '';
+
+      if (
+        openAIResponse.status === 400 &&
+        (errCode === 'content_policy_violation' || errMsg.toLowerCase().includes('policy'))
+      ) {
+        const identifier   = isFreeTrial ? getClientIp(req) : licenseKey;
+        const hashedId     = hashKey(identifier);
+        const blacklistKey = `blacklist:${hashedId}`;
+
+        // Temporäre Sperre mit TTL (15 Minuten), kein permanenter Eintrag
+        await redisSet(blacklistKey, 'policy_cooldown', POLICY_COOLDOWN_SEC).catch(() => {});
+
+        // Internes Logging für Admin-Review (DSGVO-konform: nur Hash, kein Klartext)
+        redisLog('OPENAI_POLICY_VIOLATION', hashedId);
+
+        console.warn(`[SECURITY] Content-Policy-Verletzung – 15-Min-Cooldown gesetzt (Hash: ${hashedId.slice(0, 8)}...)`);
+
+        return res.status(400).json({
+          error:    'Dieses Bild konnte nicht verarbeitet werden. Bitte versuche es mit einem anderen Bild.',
+          cooldown: true,
+          // Kein "ban: true" – Frontend setzt keinen permanenten lokalen Ban
+        });
+      }
+
       return res.status(502).json({ error: `OpenAI API Fehler: ${openAIResponse.status}` });
     }
 
     const openAIData = await openAIResponse.json();
     const rawContent = openAIData.choices?.[0]?.message?.content || '{}';
 
-    // ── JSON parsen (Kein Regex-Cleaning mehr nötig!) ────────────────
+    // ── JSON parsen ────────────────────────────────────────────────
     let pairs;
     try {
       const parsedData = JSON.parse(rawContent);
-      pairs = parsedData.flashcards; // <-- Zugriff auf das Array im Objekt
-      
+      pairs = parsedData.flashcards;
       if (!Array.isArray(pairs)) {
         throw new Error('Fehlendes Array im "flashcards" Schlüssel');
       }
     } catch (parseError) {
       console.error('[PARSE ERROR]', parseError, 'Raw Content:', rawContent);
-      return res.status(422).json({ error: 'Ungültiges JSON vom AI-Modell.', raw: rawContent });
+      return res.status(422).json({ error: 'Ungültiges JSON vom AI-Modell.' });
     }
 
     // ── Scan abziehen (nur bei echten Lizenz-Keys) ─────────────────
     if (isPaidLicense) {
       remainingScans = await kvDecr(`license:${licenseKey}`);
-      console.log(`[KV DECR] Verbleibende Scans für "${licenseKey}": ${remainingScans}`);
+      console.log(`[KV DECR] Verbleibende Scans: ${remainingScans}`);
     }
 
     // ── Erfolg-Response ────────────────────────────────────────────
-    console.log(`[API SUCCESS] Erfolg für Key: "${licenseKey}"`);
+    console.log('[API SUCCESS]');
 
     const responsePayload = { pairs };
 
-    // Free-Trial: Frontend bekommt echten IP-Zählerstand zum Synchronisieren
     if (usageCurrent !== null) {
       responsePayload.usage = { current: usageCurrent, limit: FREE_TRIAL_LIMIT };
     }
-
-    // Lizenz: verbleibende Scans mitschicken
     if (remainingScans !== null) {
       responsePayload.remaining_scans = remainingScans;
     }
