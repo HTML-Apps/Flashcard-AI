@@ -20,10 +20,6 @@
     <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
 
-    <!-- SECURITY LAYER: NSFW Pre-Filter (TensorFlow.js + NSFWJS) -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js" defer></script>
-    <script src="https://cdn.jsdelivr.net/npm/nsfwjs@4.2.0/dist/nsfwjs.min.js" defer></script>
-
     <!-- Cropper.js -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -1378,181 +1374,6 @@ You have the right to object at any time to the processing of personal data, pro
     let pendingDeckIds = [];
 
     // ══════════════════════════════════════════════
-    // SECURITY LAYER: NSFW Pre-Filter (Client-Side)
-    // ══════════════════════════════════════════════
-    let _nsfwModel = null;
-    const NSFW_THRESHOLD = 0.70; // 70% Konfidenz-Schwellenwert
-    const NSFW_BLOCKED_CATEGORIES = ['Porn', 'Hentai', 'Sexy'];
-
-    // Modell asynchron im Hintergrund laden (nach tf.js defer-Load)
-    function initNsfwModel() {
-        if (typeof nsfwjs === 'undefined' || typeof tf === 'undefined') {
-            // Bibliotheken noch nicht geladen, erneut versuchen
-            setTimeout(initNsfwModel, 1500);
-            return;
-        }
-        nsfwjs.load('https://nsfwjs.com/quant_nsfw_mobilenet/', { type: 'graph' })
-            .then(model => {
-                _nsfwModel = model;
-                console.log('[Security] NSFW-Modell erfolgreich geladen.');
-            })
-            .catch(err => {
-                console.warn('[Security] NSFW-Modell konnte nicht geladen werden:', err);
-            });
-    }
-
-    /**
-     * Prüft ein Base64-Bild lokal auf NSFW-Inhalte.
-     * @returns {Promise<{blocked: boolean, reason: string|null}>}
-     */
-    async function checkImageNsfw(base64DataUrl) {
-        if (!_nsfwModel) {
-            // Modell nicht verfügbar → Scan erlauben, aber warnen
-            console.warn('[Security] NSFW-Modell nicht bereit, Prüfung übersprungen.');
-            return { blocked: false, reason: null };
-        }
-        try {
-            const img = new Image();
-            img.src = base64DataUrl;
-            await new Promise((res, rej) => {
-                img.onload  = res;
-                img.onerror = rej;
-            });
-            const predictions = await _nsfwModel.classify(img);
-            for (const pred of predictions) {
-                if (NSFW_BLOCKED_CATEGORIES.includes(pred.className) && pred.probability >= NSFW_THRESHOLD) {
-                    return { blocked: true, reason: pred.className };
-                }
-            }
-            return { blocked: false, reason: null };
-        } catch (err) {
-            console.error('[Security] NSFW-Prüfung fehlgeschlagen:', err);
-            return { blocked: false, reason: null }; // Im Fehlerfall nicht blockieren
-        }
-    }
-
-    // ══════════════════════════════════════════════
-    // SECURITY LAYER: DSGVO-konformes Security-Logging
-    // ══════════════════════════════════════════════
-
-    /**
-     * Erstellt einen SHA-256-Hash eines Strings (z.B. Lizenzschlüssel).
-     * @returns {Promise<string>} Hex-kodierter Hash
-     */
-    async function sha256(str) {
-        if (!str) return 'anonymous';
-        try {
-            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-        } catch (_) {
-            return 'hash_error';
-        }
-    }
-
-    /**
-     * Schreibt einen anonymisierten Security-Log-Eintrag nach Upstash.
-     * Speichert NUR: Zeitstempel, Event-Typ, gehashter Identifier.
-     * KEINE Bilddaten, KEINE Klartextdaten.
-     * @param {string} eventType - z.B. 'NSFW_LOCAL_BLOCK' | 'OPENAI_POLICY_VIOLATION'
-     * @param {string} identifier - Lizenzschlüssel oder Fingerprint (wird gehasht)
-     */
-    async function writeSecurityLog(eventType, identifier) {
-        try {
-            const hashedId = await sha256(identifier);
-            await fetch('/api/scan', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    _security_log: true,
-                    event:         eventType,
-                    hashed_id:     hashedId,
-                    ts:            new Date().toISOString(),
-                }),
-            });
-        } catch (err) {
-            console.error('[Security] Log-Eintrag fehlgeschlagen:', err);
-        }
-    }
-
-    // ══════════════════════════════════════════════
-    // SECURITY LAYER: Ban-Hammer (permanente Sperre)
-    // ══════════════════════════════════════════════
-    const BAN_STORAGE_KEY = 'security_ban_flag';
-
-    /**
-     * Prüft, ob der aktuelle Nutzer lokal gesperrt ist.
-     * @returns {boolean}
-     */
-    function isUserBanned() {
-        return localStorage.getItem(BAN_STORAGE_KEY) === '1';
-    }
-
-    /**
-     * Setzt den lokalen Ban-Flag und sendet eine serverseitige Sperre.
-     * @param {string} licenseKey - Aktueller Lizenzschlüssel (für Backend-Blacklist)
-     * @param {string} reason - Grund der Sperrung
-     */
-    async function banUser(licenseKey, reason) {
-        // 1. Lokal sofort sperren
-        localStorage.setItem(BAN_STORAGE_KEY, '1');
-        // 2. Serverseitige Blacklist via Backend-Endpunkt signalisieren
-        try {
-            await fetch('/api/scan', {
-                method: 'POST',
-                headers: {
-                    'Content-Type':  'application/json',
-                    'Authorization': `Bearer ${licenseKey || 'FREE_TRIAL'}`,
-                },
-                body: JSON.stringify({
-                    _ban_request:  true,
-                    ban_reason:    reason,
-                    hashed_key:    await sha256(licenseKey || navigator.userAgent),
-                }),
-            });
-        } catch (_) { /* Best-effort */ }
-        // 3. Security-Log schreiben
-        await writeSecurityLog('OPENAI_POLICY_VIOLATION', licenseKey || navigator.userAgent);
-        console.warn('[Security] Nutzer wurde gesperrt. Grund:', reason);
-    }
-
-    /**
-     * Zeigt eine permanente Sperrmeldung an.
-     */
-    function showBanMessage() {
-        const msg = currentLang === 'de'
-            ? 'Deine Lizenz wurde wegen eines Verstoßes gegen die Nutzungsbedingungen dauerhaft gesperrt. Bitte kontaktiere den Support.'
-            : 'Your license has been permanently suspended due to a violation of the Terms of Service. Please contact support.';
-        setScanError(msg);
-        const scanBtn = document.getElementById('scan-btn');
-        if (scanBtn) scanBtn.disabled = true;
-    }
-
-    // ══════════════════════════════════════════════
-    // SECURITY LAYER: Burst-Rate-Limit (Client-Side)
-    // ══════════════════════════════════════════════
-    const RATE_LIMIT_MAX    = 5;   // Max. Scans pro Zeitfenster
-    const RATE_LIMIT_WINDOW = 60;  // Sekunden
-    let _rateLimitTimestamps = [];
-
-    /**
-     * Prüft das lokale Burst-Rate-Limit.
-     * @returns {{allowed: boolean, waitSeconds: number}}
-     */
-    function checkRateLimit() {
-        const now = Date.now();
-        const windowMs = RATE_LIMIT_WINDOW * 1000;
-        // Alte Einträge außerhalb des Zeitfensters entfernen
-        _rateLimitTimestamps = _rateLimitTimestamps.filter(ts => now - ts < windowMs);
-        if (_rateLimitTimestamps.length >= RATE_LIMIT_MAX) {
-            const oldest = _rateLimitTimestamps[0];
-            const waitMs = windowMs - (now - oldest);
-            return { allowed: false, waitSeconds: Math.ceil(waitMs / 1000) };
-        }
-        _rateLimitTimestamps.push(now);
-        return { allowed: true, waitSeconds: 0 };
-    }
-
-    // ══════════════════════════════════════════════
     //  Init
     // ══════════════════════════════════════════════
     async function initApp() {
@@ -1568,10 +1389,6 @@ You have the right to object at any time to the processing of personal data, pro
         const onboarded  = await dbGet(STORE_META, 'onboarded');
         const agbVersion = await dbGet(STORE_META, 'agb_version');
         const agbValid   = agbVersion === CURRENT_AGB_VERSION;
-
-        // SECURITY LAYER: NSFW-Modell im Hintergrund laden
-        // defer sorgt dafür, dass tf.js schon im DOM ist; wir warten kurz
-        setTimeout(initNsfwModel, 800);
 
         if (!onboarded || !agbValid) {
             const onboardingEl = document.getElementById('view-onboarding');
@@ -1826,7 +1643,7 @@ You have the right to object at any time to the processing of personal data, pro
         if (viewName === 'list')        renderDeckOverview();
         if (viewName === 'goals')       updateGoalUI();
         if (viewName === 'learn')       initLearnView();
-        if (viewName === 'scan')        { populateScanDeckSelector(); if (isUserBanned()) showBanMessage(); }
+        if (viewName === 'scan')        populateScanDeckSelector();
         if (viewName === 'deck-detail') renderDeckDetail();
     }
 
@@ -2056,22 +1873,6 @@ You have the right to object at any time to the processing of personal data, pro
     async function startAIScan() {
         if (!_scanImageBase64) { setScanError(t('scan_no_image')); return; }
 
-        // SECURITY LAYER: Ban-Hammer – permanente Sperre prüfen
-        if (isUserBanned()) {
-            showBanMessage();
-            return;
-        }
-
-        // SECURITY LAYER: Burst-Rate-Limit (Client-Side, 5 Scans/60s)
-        const rateCheck = checkRateLimit();
-        if (!rateCheck.allowed) {
-            const waitMsg = currentLang === 'de'
-                ? `Zu viele Scan-Anfragen. Bitte warte ${rateCheck.waitSeconds} Sekunde(n).`
-                : `Too many scan requests. Please wait ${rateCheck.waitSeconds} second(s).`;
-            setScanError(waitMsg);
-            return;
-        }
-
         // Lizenzschlüssel und Free-Trial-Logik
         const licenseKey = localStorage.getItem('focus_license_key') || '';
         const FREE_TRIAL_LIMIT = 5;
@@ -2093,66 +1894,46 @@ You have the right to object at any time to the processing of personal data, pro
         scanBtn.disabled = true;
 
         try {
-            // SECURITY LAYER: NSFW Pre-Filter (lokal, bevor Bild das Gerät verlässt)
-            if (loaderText) loaderText.textContent = currentLang === 'de' ? 'Inhalt wird geprüft…' : 'Checking content…';
-            const nsfwResult = await checkImageNsfw(_scanImageBase64);
-            if (nsfwResult.blocked) {
-                loader.classList.add('hidden');
-                scanBtn.disabled = false;
-                const blockMsg = currentLang === 'de'
-                    ? `Bild wurde blockiert: Unangemessener Inhalt erkannt (${nsfwResult.reason}). Upload nicht erlaubt.`
-                    : `Image blocked: Inappropriate content detected (${nsfwResult.reason}). Upload not permitted.`;
-                setScanError(blockMsg);
-                // SECURITY LAYER: DSGVO-konformes Logging (kein Bild, kein Klartext)
-                await writeSecurityLog('NSFW_LOCAL_BLOCK', licenseKey || navigator.userAgent);
-                return;
-            }
-
             if (loaderText) loaderText.textContent = t('scan_loader_ai');
 
             const response = await fetch('/api/scan', {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
+                headers: {
+                    'Content-Type':  'application/json',
                     'Authorization': `Bearer ${licenseKey || 'FREE_TRIAL'}`
                 },
                 body: JSON.stringify({ image: _scanImageBase64 }),
             });
 
-            // SECURITY LAYER: Ban-Hammer bei OpenAI Content-Policy-Verletzung
             if (!response.ok) {
                 let errData = {};
                 try { errData = await response.json(); } catch (_) {}
 
-                // HTTP 429 → Limit vom Backend erreicht
+                // HTTP 429 → Scan-Limit erreicht
                 if (response.status === 429) {
                     throw new Error('LIMIT_REACHED');
                 }
 
-                // HTTP 400 mit content_policy_violation → Nutzer sofort sperren
-                if (
-                    response.status === 400 &&
-                    (errData.code === 'content_policy_violation' ||
-                     (errData.error && typeof errData.error === 'string' && errData.error.toLowerCase().includes('policy')))
-                ) {
-                    await banUser(licenseKey, 'content_policy_violation');
-                    loader.classList.add('hidden');
-                    showBanMessage();
-                    return;
+                // HTTP 403 → Temporärer Cooldown (z.B. nach Policy-Verstoß)
+                if (response.status === 403 && errData.cooldown) {
+                    const msg = currentLang === 'de'
+                        ? 'Dein Zugang wurde vorübergehend gesperrt. Bitte versuche es in 15 Minuten erneut oder kontaktiere den Support.'
+                        : 'Your access has been temporarily suspended. Please try again in 15 minutes or contact support.';
+                    throw new Error(msg);
+                }
+
+                // HTTP 400 → Bild konnte nicht verarbeitet werden (Content-Policy, kein Ban)
+                if (response.status === 400 && errData.cooldown) {
+                    const msg = currentLang === 'de'
+                        ? 'Dieses Bild konnte nicht verarbeitet werden. Bitte versuche ein anderes Foto (z.B. bessere Beleuchtung oder anderen Bildausschnitt).'
+                        : 'This image could not be processed. Please try a different photo.';
+                    throw new Error(msg);
                 }
 
                 throw new Error(errData.error || `HTTP ${response.status}`);
             }
 
             const data = await response.json();
-
-            // SECURITY LAYER: Ban-Hammer – Policy-Verletzung kann auch im Erfolgs-Response stecken
-            if (data.ban === true || data.error_code === 'content_policy_violation') {
-                await banUser(licenseKey, data.error_code || 'policy_violation_in_response');
-                loader.classList.add('hidden');
-                showBanMessage();
-                return;
-            }
 
             const pairs = data.pairs;
             if (!Array.isArray(pairs) || pairs.length === 0) throw new Error(t('scan_no_vocab'));
@@ -2163,9 +1944,9 @@ You have the right to object at any time to the processing of personal data, pro
                 : (decks.length > 0 ? [decks[0].id] : []);
 
             pendingScanPairs = pairs.map((p, i) => ({
-                id: Date.now() + i,
+                id:    Date.now() + i,
                 front: (p.front || p.en || '').trim(),
-                back:  (p.back || p.de || '').trim(),
+                back:  (p.back  || p.de || '').trim(),
             })).filter(w => w.front && w.back);
 
             loader.classList.add('hidden');
