@@ -1109,87 +1109,87 @@ Sie haben das Recht, jederzeit gegen die Verarbeitung von personenbezogenen Date
 <strong>Contact:</strong>
 Email: byteengineered@gmail.com`,
             legal_privacy_heading: 'Privacy Policy',
-            legal_privacy_body: `<strong>Data Controller</strong>
-The data controller within the meaning of data protection laws, in particular the EU General Data Protection Regulation (GDPR), is Hendrik Junker (for contact details, see Imprint).
+            legal_privacy_body: `<strong>Controller</strong>
+The controller within the meaning of data protection laws, in particular the EU General Data Protection Regulation (GDPR), is Hendrik Junker (for contact details, please refer to the Legal Notice / Impressum).
 
 <strong>Your Data Subject Rights</strong>
-You can exercise the following rights at any time using the contact details provided, in accordance with the GDPR:
+You may exercise the following rights at any time using the contact details provided, in accordance with the GDPR:
 <ul>
-    • Right to access your stored data (Art. 15 GDPR)
+    • Right of access to your data stored by us (Art. 15 GDPR)
     • Right to rectification of inaccurate personal data (Art. 16 GDPR)
-    • Right to erasure of your stored data (Art. 17 GDPR)
-    • Right to restriction of processing (Art. 18 GDPR)
-    • Right to object to processing (Art. 21 GDPR)
+    • Right to erasure of your data stored by us (Art. 17 GDPR)
+    • Right to restriction of data processing (Art. 18 GDPR)
+    • Right to object to the processing of your data (Art. 21 GDPR)
     • Right to data portability (Art. 20 GDPR)
 </ul>
-If you have given us your consent, you can withdraw it at any time with effect for the future. You also have the right to lodge a complaint with the competent supervisory authority at any time.
+If you have given us your consent, you can withdraw it at any time with effect for the future. You also have the right to lodge a complaint with a competent data protection supervisory authority at any time.
 
 <strong>Processing Activities and Services Used</strong>
 <strong>Local Data Storage (IndexedDB & Local Storage)</strong>
-To provide the core functions of this web app, we rely on local storage technologies in your browser. Your created flashcards and learning progress are stored exclusively in the IndexedDB of your device. In addition, we store technical settings (e.g., selected language, theme preference, PWA installation status, and your encrypted license key) in the Local Storage of your browser. 
-This data storage is strictly necessary to technically provide the service you have explicitly requested without errors. The legal basis for accessing the local storage is Sec. 25 (2) No. 2 TTDSG (German Telecommunications-Telemedia Data Protection Act). The data remains entirely on your device and is not uploaded to our servers or shared with third parties, unless you explicitly activate cloud services (such as the scanning process).
+To provide the core functions of this web app, we utilize local storage technologies within your browser. Your created flashcards and learning progress are stored exclusively in the IndexedDB of your end device. In addition, we store technical settings (e.g., selected language, theme preference, PWA installation status, and your encrypted license key) in your browser\'s Local Storage. 
+This data storage is strictly necessary to technically provide the service explicitly requested by you. The legal basis for accessing the local storage is Section 25 para. 2 no. 2 of the German Telecommunications-Telemedia Data Protection Act (TTDSG/TDDDG). The data remains entirely on your end device and is not uploaded to our servers or shared with third parties, unless you explicitly activate cloud-based services (such as the scan process).
 
 <strong>Hosting and Log Files</strong>
-This web app is hosted by Vercel. When you visit the app, the server automatically collects general connection data (including IP address, date, time, browser type) to ensure the security, stability, and provision of the app. The legal basis is our legitimate interest (Art. 6 (1) lit. f GDPR). A Data Processing Agreement (DPA) has been concluded with the hosting provider.
+This web app is hosted by Vercel. When you access the app, the server automatically collects general connection data (including your IP address, date, time, and browser type) to ensure the security, stability, and delivery of the app. The legal basis for this is our legitimate interest (Art. 6 para. 1 lit. f GDPR). A Data Processing Agreement (DPA) has been concluded with the hosting provider.
 
 <strong>Use of OpenAI for Text Extraction</strong>
-If you use the scan function, the raw image or text data is transmitted via an API interface to the servers of OpenAI (OpenAI Ireland Ltd., Dublin). This is necessary to provide the AI functionality. The legal basis for this is our legitimate interest (Art. 6 (1) lit. f GDPR) as well as the performance of a contract (Art. 6 (1) lit. b GDPR). We have concluded a Data Processing Agreement (DPA) with OpenAI based on the EU Standard Contractual Clauses (SCCs). According to the official guidelines for OpenAI's commercial API, your transmitted data will not be used to train OpenAI's models.
+When you use the scan function, the raw image or text data is transmitted via an API interface to the servers of OpenAI (OpenAI Ireland Ltd., Dublin). This is required to provide the AI functionality. The legal basis for this processing is our legitimate interest (Art. 6 para. 1 lit. f GDPR) as well as the performance of the user contract (Art. 6 para. 1 lit. b GDPR). We have concluded a Data Processing Agreement (DPA) with OpenAI based on the EU Standard Contractual Clauses (SCCs). In accordance with OpenAI\'s official policies for its commercial API, the data you transmit is not used to train OpenAI models.
 
-<strong>Camera and Photo Access</strong>
-In order to use the AI scanning feature, the app requests access to your device's camera or photo gallery. The capture of the camera image and the cropping of the photo are initially processed entirely locally on your device. Only when you explicitly press the "Scan with AI" button (or similar) is the isolated image material transmitted to the OpenAI interface. We do not store this image data permanently on our servers; it is discarded on the server side after processing by the AI and the return of the flashcard data.
+<strong>Camera and Photo Access & Client-Side Filtering</strong>
+In order to use the AI scan function, the app requests access to your device\'s camera or photo gallery. The capture of the camera image and the cropping of the photo are initially processed purely locally on your device. Furthermore, before any data is transmitted to external interfaces, the app performs an automated, purely local pre-check (client-side filtering) for prohibited content (e.g., NSFW material). This screening takes place exclusively on your end device; no image data is transmitted to our servers during this process. The isolated image material is transmitted to the OpenAI interface only if you explicitly click the "Scan with AI" button (or equivalent) and the local screening is successful. We do not store this image data permanently on our servers; it is discarded server-side immediately after processing by the AI and the return of the flashcard data.
 
 <strong>Payment Processing and Licenses (Lemon Squeezy)</strong>
-We use the payment service provider Lemon Squeezy (Lemon Squeezy, LLC, USA) for the sale of licenses and the verification of scan limits. When you purchase a license or validate it in the app, the necessary transaction and usage data (e.g., IP address, email, license key) is transmitted to Lemon Squeezy. The processing is carried out for the performance of a contract (Art. 6 (1) lit. b GDPR). The data transfer to the USA is secured by the adequacy decision of the EU Commission (EU-US Data Privacy Framework) or by EU Standard Contractual Clauses.
+For the sale of licenses and the verification of scan limits, we utilize the payment service provider Lemon Squeezy (Lemon Squeezy, LLC, USA), who acts as a so-called "Merchant of Record". When you purchase a license or validate it within the app, required transaction and usage data (e.g., IP address, email address, license key) are transmitted to Lemon Squeezy. This processing is carried out for the performance of a contract (Art. 6 para. 1 lit. b GDPR). The data transfer to the USA is safeguarded by the adequacy decision of the EU Commission (EU-US Data Privacy Framework) or by EU Standard Contractual Clauses (SCCs).
 
-<strong>Scan Limit Management (Upstash)</strong>
-To technically manage scan limits and prevent API abuse, we use the database service Upstash (Upstash Inc., USA). Anonymized or hashed usage data is processed in this context. The legal basis is our legitimate interest (Art. 6 (1) lit. f GDPR) in technical security and abuse prevention. Here too, the data transfer is secured by EU Standard Contractual Clauses.
+<strong>Scan Limit Management, API Security, and Cooldown Logging (Upstash)</strong>
+To technically manage scan limits (including free trial scans) and to prevent API abuse, we use the database service Upstash (Upstash Inc., USA). In this process, pseudonymized or hashed usage data (such as the cryptographically hashed value of your IP address or your license key) are processed. In the event of detected violations of the terms of use or if automated content policy filters of the AI interfaces are triggered, this pseudonymized hash is temporarily stored for automated access blocks (so-called cooldowns) as well as in a rotating security log. The legal basis is our overriding legitimate interest (Art. 6 para. 1 lit. f GDPR) in maintaining technical system integrity and preventing abuse. The data transfer is safeguarded by EU Standard Contractual Clauses (SCCs).
 
 <strong>Contacting Us</strong>
-If you contact us via email, your details will be stored for the purpose of processing the inquiry and for possible follow-up questions. The legal basis for this is Art. 6 (1) lit. a or b GDPR.
+If you contact us via email, the details you provide will be stored for the purpose of processing the inquiry and handling any follow-up questions. The legal basis for this is Art. 6 para. 1 lit. a or lit. b GDPR.
 
-<strong>Right to Object in Individual Cases</strong>
-You have the right to object at any time to the processing of personal data, provided this is based on legitimate interests (Art. 6 (1) lit. f GDPR). Please send your objection by email to the data controller.`,
+<strong>Right to Object on a Case-by-Case Basis</strong>
+You have the right to object at any time to the processing of personal data concerning you which is based on legitimate interests (Art. 6 para. 1 lit. f GDPR). Please direct your objection via email to the controller.`,
 
-            legal_terms_heading: 'Terms and Conditions (T&C)',
-            legal_terms_body:
-`<strong>§ 1 Scope of Application and Provider</strong>
-(1) These Terms and Conditions (hereinafter "T&C") govern the use of the web application "Focus Flashcards" (hereinafter "App"), accessible at focus-flashcards.app.<br>
-(2) The provider of the App and your contractual partner for the provision of the technical platform is: Hendrik Junker (for full address, see Imprint) (hereinafter "Provider").<br>
-(3) The offer is aimed exclusively at consumers within the meaning of Sec. 13 of the German Civil Code (BGB).
+            legal_terms_heading: 'Terms and Conditions (T&Cs)',
+            legal_terms_body: `<strong>§ 1 Scope and Provider</strong>
+(1) These Terms and Conditions (hereinafter "T&Cs") govern the use of the web application "Focus Flashcards" (hereinafter "App"), accessible at focus-flashcards.app.<br>
+(2) The provider of the App and your contractual partner for the provision of the technical platform is: Hendrik Junker (for full address, see Legal Notice / Impressum) (hereinafter "Provider").<br>
+(3) This offer is directed exclusively to consumers within the meaning of Section 13 of the German Civil Code (BGB).
 
-<strong>§ 2 Service Description and Scope of Functions</strong>
-(1) Focus Flashcards is a Progressive Web App (PWA) that allows users to upload texts or photos of learning materials. With the help of artificial intelligence (OpenAI API), digital flashcards are automatically generated from these templates.<br>
-(2) By default, the created flashcards and learning progress are stored exclusively locally in the browser storage (IndexedDB) of the user's device. There is no central cloud storage or synchronization of the learning content by the Provider.<br>
-(3) The Provider makes the infrastructure for AI processing available within the scope of technical availability. There is no entitlement to an uninterrupted, error-free availability of the service. Maintenance work or failures of connected third-party services (e.g., OpenAI) may temporarily restrict usage.<br>
-(4) The Provider grants the user a limited quota of free test scans. This constitutes a voluntary gesture of goodwill. The Provider reserves the right to change, restrict, or completely discontinue this quota at any time and without prior notice, in particular to prevent abuse of the provided interfaces.
+<strong>§ 2 Description of Performance and Scope of Functions</strong>
+(1) Focus Flashcards is a Progressive Web App (PWA) that allows users to upload texts or photos of study materials. Digital flashcards are automatically generated from these templates using artificial intelligence (OpenAI API).<br>
+(2) The created flashcards and learning progress are stored by default exclusively in the local browser storage (IndexedDB) of the user\'s end device. Centralized cloud storage or synchronization of the study content by the Provider does not take place.<br>
+(3) The Provider provides the infrastructure for AI processing within the limits of technical availability. There is no claim to uninterrupted, error-free availability of the service. Maintenance work or outages of connected third-party services (e.g., OpenAI) may temporarily restrict usage.<br>
+(4) In order to ensure the stability, security, and policy compliance of the systems, the Provider and connected third-party services deploy automated security filters (including local pre-checks on the end device). If these filters are triggered (e.g., due to a suspicion of prohibited content), the Provider reserves the right to temporarily and fully automatically pause access to the AI interface (cooldown phase). Since such filters may systemically block legitimate content by mistake (so-called false positives, e.g., in the case of scientific or medical texts), such a temporary, automated block does not constitute a material defect of the service and does not justify any claim to a price reduction or refund.<br>
+(5) The Provider grants the user a limited quota of free trial scans. This constitutes a voluntary courtesy service. The technical limitation and allocation of this quota are carried out for the purpose of abuse prevention based on the user\'s pseudonymized IP address. The Provider reserves the right to change, restrict, or completely discontinue this quota at any time and without prior notice, in particular to prevent abuse of the provided interfaces.
 
 <strong>§ 3 Conclusion of Contract and Payment Processing (Merchant of Record)</strong>
-(1) The App offers free basic functions as well as the option to unlock paid extensions (e.g., expanded scan limits).<br>
-(2) The commercial processing of paid orders is handled by the external reseller Lemon Squeezy (Lemon Squeezy, LLC, USA), acting as the so-called "Merchant of Record". Upon making a purchase, the user legally concludes the purchase contract directly with Lemon Squeezy. The terms and conditions of Lemon Squeezy apply supplementarily.<br>
-(3) Upon successful payment, Lemon Squeezy transmits a license key to the user. This key is personalized and intended exclusively for the private use of the respective buyer. Any passing on, publication, or commercial resale of the license key is strictly prohibited. In the event of suspected misuse or account sharing, the Provider reserves the right to permanently block the license key without any claim to a refund.<br>
-(4) <strong>Right of Withdrawal:</strong> Since the legal purchase contract is concluded exclusively between the user and Lemon Squeezy, LLC, all claims for withdrawal, cancellation, or refunds are subject to the terms and conditions of Lemon Squeezy. Corresponding requests must be processed directly via the order confirmation or the support of Lemon Squeezy.
+(1) The App offers free basic functions as well as the option to unlock paid upgrades (e.g., extended scan limits).<br>
+(2) The commercial processing of paid orders is handled via the external reseller Lemon Squeezy (Lemon Squeezy, LLC, USA), acting as a so-called "Merchant of Record". Upon making a purchase, the user enters into a purchase contract legally directly with Lemon Squeezy. The terms and conditions of Lemon Squeezy apply supplementarily.<br>
+(3) Following a successful payment, Lemon Squeezy transmits a license key to the user. This key is personalized and intended exclusively for the private use of the respective purchaser. Any transfer, publication, or commercial resale of the license key is strictly prohibited. In the event of suspected abusive use or account sharing, the Provider reserves the right to permanently block the license key without entitlement to a refund.<br>
+(4) <strong>Right of Withdrawal:</strong> Since the legal purchase contract is concluded exclusively between the user and Lemon Squeezy, LLC, all claims regarding withdrawal, cancellation, or refunds must be handled in accordance with the terms of Lemon Squeezy. Corresponding requests must be processed directly through the order confirmation or the support of Lemon Squeezy.
 
 <strong>§ 4 Copyrights and Responsibility for Content</strong>
-(1) The user is fully responsible for all content (e.g., photos of book pages, scripts, or notes) that they load or scan into the App. The user guarantees that they have the necessary rights to these materials or that the use is permissible within the scope of legal limitations (e.g., the right to make private copies pursuant to Sec. 53 of the German Copyright Act - UrhG). The Provider does not store this content centrally and does not proactively check for copyright infringements.<br>
-(2) The user acknowledges that texts generated purely by artificial intelligence generally do not enjoy their own copyright protection under applicable law. The Provider claims no ownership rights to the generated flashcards and grants the user the unrestricted right to use them for private purposes.<br>
+(1) The user is fully and solely responsible for all content (e.g., photos of book pages, scripts, or notes) that they upload or scan into the App. The user guarantees that they possess the necessary rights to these materials or that the use is permissible within the scope of statutory limitations (e.g., the right to private copying pursuant to Section 53 of the German Copyright Act - UrhG). The Provider does not store this content centrally and does not perform any proactive monitoring for rights infringements.<br>
+(2) The user acknowledges that texts generated purely by artificial intelligence generally do not enjoy independent copyright protection under applicable law. The Provider lays no claim to the ownership rights of the generated flashcards and grants the user the unrestricted right to use them for private purposes.<br>
 (3) All copyrights, trademarks, and other intellectual property rights to the software of the App itself (including source code, user interface, and logos) remain with the Provider.<br>
-(4) <strong>Prohibition of Illegal Content:</strong> The user is strictly prohibited from using the App's scan function to upload image or text materials that violate applicable law. This includes in particular, but is not limited to, depictions of violence, pornographic content, incitement to hatred, or content that obviously violates the rights of third parties (in particular copyrights or personal rights). A violation will lead to the immediate blocking of the user license. The Provider reserves the right to take appropriate measures in the event of suspected criminal behavior and to hand over API logs to investigating authorities if legally required.
+(4) <strong>Prohibition of Illegal Content:</strong> The user is strictly prohibited from using the scan function of the App to upload image or text materials that violate applicable law or the usage policies of the connected AI services. This includes, but is not limited to, depictions of violence, pornographic content, inflammatory material (Volksverhetzung), or content that obviously infringes the rights of third parties (in particular copyrights or personal rights). A violation may lead to the immediate, automated, temporary, or permanent blocking of the user license. The Provider reserves the right, in the event of suspected criminally relevant behavior, to take appropriate measures and to hand over API logs to law enforcement authorities if legally required. Claims for refunds in the event of justified blockings due to a violation of these guidelines are excluded.
 
 <strong>§ 5 Disclaimer of Warranties Regarding AI Content</strong>
-(1) The creation of the flashcards is automated by artificial intelligence algorithms. The user is aware that AI models can, due to their nature, generate incorrect, incomplete, or factually false results ("hallucinations").<br>
-(2) The Provider explicitly assumes no warranty or guarantee for the material accuracy, technical correctness, or completeness of the generated flashcards. The user is obliged to independently verify the generated content before using it for learning.<br>
-(3) The Provider assumes no liability for the achievement of a specific learning success or the passing of exams through the use of the App.
+(1) The creation of the flashcards is carried out automatically by algorithms of an artificial intelligence. The user is aware that AI models can systemically generate incorrect, incomplete, or factually wrong results ("hallucinations").<br>
+(2) The Provider explicitly assumes no warranty or guarantee for the contextual correctness, professional accuracy, or completeness of the generated flashcards. The user is obliged to independently verify the generated content prior to using it for study purposes.<br>
+(3) The Provider assumes no liability for the achievement of a specific learning outcome or the passing of examinations through the use of the App.
 
 <strong>§ 6 Limitation of Liability and Data Loss</strong>
-(1) Since the flashcards are stored exclusively locally on the user's device, the responsibility for data backup lies solely with the user. If the browser cache is cleared, incognito modes are used, or the device is changed, the data may be irrevocably lost. The Provider provides a manual JSON export function for this purpose. The Provider is not liable for the loss of local user data.<br>
-(2) In the event of a breach of material contractual obligations (cardinal obligations), the Provider's liability for simple negligence is limited to the typical, foreseeable damage.<br>
-(3) Otherwise, the Provider's liability for slightly negligent breaches of duty is excluded.<br>
-(4) The above limitations of liability do not apply in the event of injury to life, limb, or health, in the event of fraudulent concealment of defects, the assumption of a guarantee, or in cases of intent or gross negligence.
+(1) Since the storage of the flashcards occurs exclusively locally on the user\'s end device, the responsibility for data backup lies solely with the user. If the browser cache is cleared, incognito modes are used, or a device change occurs, the data may be irretrievably lost. The Provider provides a manual JSON export function for this purpose. Any liability of the Provider for the loss of local user data is excluded.<br>
+(2) In the event of a breach of essential contractual obligations (cardinal obligations), the Provider shall be liable in cases of simple negligence limited to the amount of the contractually typical, foreseeable damage.<br>
+(3) In all other respects, the liability of the Provider for slightly negligent breaches of duty is excluded.<br>
+(4) The foregoing limitations of liability do not apply to injury to life, body, or health, in the event of fraudulent concealment of defects, the assumption of a guarantee, as well as in cases of intent or gross negligence.
 
 <strong>§ 7 Online Dispute Resolution and Final Provisions</strong>
-(1) The European Commission provides a platform for online dispute resolution (OS), which you can find at https://ec.europa.eu/consumers/odr/. We are neither obliged nor willing to participate in a dispute resolution procedure before a consumer arbitration board.<br>
-(2) The law of the Federal Republic of Germany shall apply to the exclusion of the UN Convention on Contracts for the International Sale of Goods (CISG). For consumers, this choice of law only applies to the extent that the protection granted by mandatory provisions of the law of the country in which the consumer has their habitual residence is not withdrawn.<br>
-(3) Should individual provisions of these T&C be or become invalid, the validity of the remaining provisions shall remain unaffected.`,
+(1) The European Commission provides a platform for Online Dispute Resolution (ODR), which you can find at https://ec.europa.eu/consumers/odr/. We are neither obliged nor willing to participate in a dispute resolution procedure before a consumer arbitration board.<br>
+(2) The law of the Federal Republic of Germany shall apply, excluding the UN Convention on Contracts for the International Sale of Goods (CISG). For consumers, this choice of law applies only to the extent that the protection granted by mandatory provisions of the law of the state in which the consumer has their habitual residence is not withdrawn.<br>
+(3) Should individual provisions of these T&Cs be or become invalid, the validity of the remaining provisions shall remain unaffected.`,
             legal_close:          'Close',
 
             deck_words_suffix:    'words',
