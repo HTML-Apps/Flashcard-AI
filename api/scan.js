@@ -16,8 +16,10 @@ export const config = {
   api: { bodyParser: { sizeLimit: '4mb' } },
 };
 
-const FREE_TRIAL_LIMIT      = 5;
-const POLICY_COOLDOWN_SEC   = 900; // 15 Minuten Cooldown statt permanenter Ban
+const FREE_TRIAL_LIMIT        = 5;
+const FREE_TRIAL_TTL_SEC      = 86400; // 24 Stunden – IP-Zähler resettet sich automatisch
+const POLICY_COOLDOWN_SEC     = 900;   // 15 Minuten Cooldown statt permanenter Ban
+const INVALID_KEY_CACHE_SEC   = 600;   // 10 Minuten Negative-Cache für ungültige Lemon-Squeezy-Keys
 
 // ── System-Prompt für OpenAI ───────────────────────────────────────────────
 const SYSTEM_PROMPT = `Du bist ein präziser Daten-Extraktor und didaktischer Lern-Assistent für Studenten (insbesondere Medizin, Jura und MINT).
@@ -67,6 +69,24 @@ async function redisCall(path, method = 'GET') {
 async function redisIncr(key) {
   const json = await redisCall(`/incr/${encodeURIComponent(key)}`, 'POST');
   return json.result;
+}
+
+// EXPIRE – setzt TTL auf einen bestehenden Key (nur wenn noch keine TTL gesetzt ist)
+async function redisExpire(key, ttlSeconds) {
+  // NX = setze TTL nur wenn der Key aktuell KEINE Ablaufzeit hat
+  // → verhindert, dass laufende Zähler bei jedem Request auf 24h zurückgesetzt werden
+  await redisCall(`/expire/${encodeURIComponent(key)}/${ttlSeconds}/NX`, 'POST');
+}
+
+// INCR + einmaliges EXPIRE beim ersten Zugriff (count === 1)
+// Setzt den 24h-TTL nur beim allerersten Scan einer IP – nie danach.
+async function redisIncrWithTTL(key, ttlSeconds) {
+  const count = await redisIncr(key);
+  if (count === 1) {
+    // Erster Request dieser IP: TTL einmalig setzen
+    await redisExpire(key, ttlSeconds);
+  }
+  return count;
 }
 
 // SET mit optionalem TTL (EX = Sekunden)
@@ -253,11 +273,12 @@ export default async function handler(req, res) {
     // A) FREE TRIAL – IP-basiertes Throttling via Redis INCR
     //    SECURITY: IP kommt aus x-real-ip (Vercel Edge), nicht aus
     //    dem manipulierbaren X-Forwarded-For-Header.
+    //    TTL: 24h ab erstem Request – verhindert Dauer-Bann bei dynamischen IPs.
     // ════════════════════════════════════════════════════════════════
     if (isFreeTrial) {
       const ip       = getClientIp(req);
       const redisKey = `free_trial_ip:${hashKey(ip)}`; // IP ebenfalls hashen
-      const count    = await redisIncr(redisKey);
+      const count    = await redisIncrWithTTL(redisKey, FREE_TRIAL_TTL_SEC);
 
       console.log(`[FREE TRIAL] Zähler: ${count}/${FREE_TRIAL_LIMIT}`);
 
@@ -281,11 +302,23 @@ export default async function handler(req, res) {
       console.log(`[KV GET] Scans verbleibend: ${scansLeft}`);
 
       if (scansLeft === null || isNaN(scansLeft)) {
+        // ── Negative-Cache-Check: War dieser Key schon mal ungültig? ──────────
+        // Verhindert Brute-Force gegen die Lemon-Squeezy-API (Vercel-IP-Bann-Schutz).
+        // Ungültige Keys werden 10 Min. in Redis gecacht – kein erneuter API-Call nötig.
+        const invalidCacheKey = `ls_invalid:${hashKey(licenseKey)}`;
+        const isCachedInvalid = await redisExists(invalidCacheKey);
+        if (isCachedInvalid) {
+          console.warn('[BLOCKIERT] Ungültiger Key aus Negative-Cache abgelehnt (kein LS-Call).');
+          return res.status(403).json({ error: 'Ungültiger oder abgelaufener Lizenzschlüssel.' });
+        }
+
         console.log('[LEMON SQUEEZY] Validiere Key...');
         const valid = await validateLemonSqueezy(licenseKey);
 
         if (!valid) {
-          console.warn('[BLOCKIERT] Ungültiger Lizenzschlüssel.');
+          console.warn('[BLOCKIERT] Ungültiger Lizenzschlüssel – wird 10 Min. gecacht.');
+          // Negative-Cache: ungültigen Key mit TTL in Redis speichern
+          await redisSet(invalidCacheKey, 'invalid', INVALID_KEY_CACHE_SEC).catch(() => {});
           return res.status(403).json({ error: 'Ungültiger oder abgelaufener Lizenzschlüssel.' });
         }
 
