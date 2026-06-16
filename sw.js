@@ -1,5 +1,5 @@
 // sw.js - Gemergte & optimierte Version für Flashcard-AI
-const CACHE_NAME = "Flashcard-AI_v3"; // Version erhöht für sauberes Client-Update
+const CACHE_NAME = "Flashcard-AI_v4"; // Version erhöht: Tailwind CDN auf jsDelivr umgestellt
 
 // Assets, die für den vollständigen Offline-Betrieb zwingend benötigt werden
 const ASSETS_TO_CACHE = [
@@ -9,7 +9,8 @@ const ASSETS_TO_CACHE = [
   "./brain.png",
   
   // Externe CDNs (Sicherheitsnetz für Offline-Modus)
-  "https://cdn.tailwindcss.com",
+  // jsDelivr setzt korrekte CORS-Header → SW kann cachen (cdn.tailwindcss.com konnte das nicht)
+  "https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.16/tailwindcss.js",
   "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"
