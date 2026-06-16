@@ -7,6 +7,7 @@
 //   KV_REST_API_URL          – Upstash KV URL  (für Lizenz-Keys)
 //   KV_REST_API_TOKEN        – Upstash KV token (für Lizenz-Keys)
 //   SECRET_MASTER_KEY        – Dein eigener Test-Key (unbegrenzte Scans)
+//   TURNSTILE_SECRET_KEY     – Cloudflare Turnstile Secret Key (Bot-Schutz für Free-Tier)
 
 import crypto from 'crypto';
 
@@ -156,6 +157,22 @@ async function validateLemonSqueezy(licenseKey) {
   return data.valid === true;
 }
 
+// ── Cloudflare Turnstile Token validieren ─────────────────────────────────
+async function validateTurnstileToken(token, ip) {
+  const formData = new URLSearchParams({
+    secret:   process.env.TURNSTILE_SECRET_KEY || '',
+    response: token,
+    remoteip: ip,
+  });
+  const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    formData,
+  });
+  const data = await res.json();
+  return data.success === true;
+}
+
 // ── Haupt-Handler ──────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   // CORS
@@ -179,6 +196,27 @@ export default async function handler(req, res) {
   const isPaidLicense = !isMasterKey && !isFreeTrial;
 
   console.log(`[API START] Master: ${isMasterKey} | FreeTrial: ${isFreeTrial}`);
+
+  // ════════════════════════════════════════════════════════════════
+  // TURNSTILE: Bot-Schutz für Free-Tier-Zugriff
+  // Nur für Free-Trial erforderlich – Paid-Lizenzen und Master-Key überspringen.
+  // ════════════════════════════════════════════════════════════════
+  if (isFreeTrial) {
+    const { turnstileToken } = req.body || {};
+    if (!turnstileToken) {
+      return res.status(403).json({ error: 'TURNSTILE_MISSING', turnstile: true });
+    }
+    try {
+      const ip    = getClientIp(req);
+      const valid = await validateTurnstileToken(turnstileToken, ip);
+      if (!valid) {
+        return res.status(403).json({ error: 'TURNSTILE_INVALID', turnstile: true });
+      }
+    } catch (err) {
+      console.error('[TURNSTILE] Validierung fehlgeschlagen:', err);
+      return res.status(403).json({ error: 'TURNSTILE_ERROR', turnstile: true });
+    }
+  }
 
   // ════════════════════════════════════════════════════════════════
   // SECURITY: Blacklist-Check mit konsistentem SHA-256-Hash
