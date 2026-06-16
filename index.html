@@ -1891,7 +1891,8 @@ You have the right to object at any time to the processing of personal data conc
     }
 
     // ── Turnstile Callbacks ──
-    let _turnstileToken = null;
+    let _turnstileToken  = null;
+    let _scanAttempted   = false; // Flag: wird true wenn Nutzer aktiv auf "Scannen" drückt
 
     function onTurnstileSuccess(token) {
         _turnstileToken = token;
@@ -1903,7 +1904,11 @@ You have the right to object at any time to the processing of personal data conc
 
     function onTurnstileError() {
         _turnstileToken = null;
-        setScanError(t('scan_error_turnstile_failed'));
+        // Nur Fehlermeldung anzeigen wenn der Nutzer aktiv einen Scan gestartet hat,
+        // nicht beim initialen Widget-Laden (z.B. ungültiger Site-Key in Dev-Umgebung).
+        if (_scanAttempted) {
+            setScanError(t('scan_error_turnstile_failed'));
+        }
     }
 
     function _showTurnstileIfNeeded() {
@@ -1920,6 +1925,8 @@ You have the right to object at any time to the processing of personal data conc
 
     async function startAIScan() {
         if (!_scanImageBase64) { setScanError(t('scan_no_image')); return; }
+
+        _scanAttempted = true; // Ab jetzt darf onTurnstileError eine Meldung zeigen
 
         // Lizenzschlüssel und Free-Trial-Logik
         const licenseKey = localStorage.getItem('focus_license_key') || '';
@@ -2028,7 +2035,8 @@ You have the right to object at any time to the processing of personal data conc
             scanBtn.disabled = true;
 
             // Token ist Single-Use → nach erfolgreichem Scan zurücksetzen
-            _turnstileToken = null;
+            _turnstileToken  = null;
+            _scanAttempted   = false;
             if (window.turnstile) {
                 window.turnstile.reset('#turnstile-widget');
             }
@@ -2047,6 +2055,7 @@ You have the right to object at any time to the processing of personal data conc
             console.error('AI scan error:', err);
             loader.classList.add('hidden');
             scanBtn.disabled = false;
+            _scanAttempted = false;
             if (err.message === 'LIMIT_REACHED') {
                 setScanError(t('scan_error_limit_reached'));
                 openSettingsModal();
@@ -2809,6 +2818,8 @@ You have the right to object at any time to the processing of personal data conc
     } else {
         console.warn('⚠️ Dieser Browser unterstützt keine Service Worker (PWA-Features).');
     }
+
+
     </script>
 </body>
 </html>
