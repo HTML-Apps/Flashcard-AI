@@ -24,6 +24,9 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
+    <!-- Cloudflare Turnstile -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -455,6 +458,19 @@
                             <i class="fa-solid fa-image"></i> <span data-i18n="scan_gallery_btn"></span>
                         </button>
                     </div>
+
+                    <!-- Cloudflare Turnstile Widget (nur für Free-Tier sichtbar) -->
+                    <div id="turnstile-wrapper" class="hidden w-full flex justify-center">
+                        <div id="turnstile-widget"
+                             class="cf-turnstile"
+                             data-sitekey="YOUR_TURNSTILE_SITE_KEY"
+                             data-theme="auto"
+                             data-callback="onTurnstileSuccess"
+                             data-expired-callback="onTurnstileExpired"
+                             data-error-callback="onTurnstileError">
+                        </div>
+                    </div>
+
                     <button id="scan-btn" onclick="startAIScan()" disabled class="w-full accent-bg accent-bg-hover text-white py-4 rounded-2xl font-bold accent-shadow transition-colors active:scale-95 flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> <span data-i18n="scan_step2_btn"></span>
                     </button>
@@ -878,6 +894,8 @@
             settings_license_placeholder: 'z.B. FOCS-ABCD-1234',
             scan_error_no_key: 'Bitte gib deinen Lizenzschlüssel in den Einstellungen ein.',
             scan_error_limit_reached: 'Kostenlose Scans aufgebraucht. Bitte gib einen Lizenzschlüssel ein.',
+            scan_error_turnstile_required: 'Bitte bestätige zuerst, dass du kein Roboter bist.',
+            scan_error_turnstile_failed: 'Sicherheitsprüfung fehlgeschlagen. Bitte lade die Seite neu und versuche es erneut.',
 
             settings_scan_counter:'Scans verwendet',
             settings_scan_free:    (used, limit) => `${used} / ${limit} (Kostenlos)`,
@@ -1090,6 +1108,8 @@ Sie haben das Recht, jederzeit gegen die Verarbeitung von personenbezogenen Date
             settings_license_placeholder: 'e.g. FOCS-ABCD-1234',
             scan_error_no_key: 'Please enter your license key in settings.',
             scan_error_limit_reached: 'Free scans exhausted. Please enter a license key.',
+            scan_error_turnstile_required: 'Please confirm you are not a robot first.',
+            scan_error_turnstile_failed: 'Security check failed. Please reload the page and try again.',
 
             settings_scan_counter:'Scans used',
             settings_scan_free:    (used, limit) => `${used} / ${limit} (Free)`,
@@ -1643,7 +1663,7 @@ You have the right to object at any time to the processing of personal data conc
         if (viewName === 'list')        renderDeckOverview();
         if (viewName === 'goals')       updateGoalUI();
         if (viewName === 'learn')       initLearnView();
-        if (viewName === 'scan')        populateScanDeckSelector();
+        if (viewName === 'scan')        { populateScanDeckSelector(); _showTurnstileIfNeeded(); }
         if (viewName === 'deck-detail') renderDeckDetail();
     }
 
@@ -1870,6 +1890,34 @@ You have the right to object at any time to the processing of personal data conc
         else     { box.classList.add('hidden'); text.textContent = ''; }
     }
 
+    // ── Turnstile Callbacks ──
+    let _turnstileToken = null;
+
+    function onTurnstileSuccess(token) {
+        _turnstileToken = token;
+    }
+
+    function onTurnstileExpired() {
+        _turnstileToken = null;
+    }
+
+    function onTurnstileError() {
+        _turnstileToken = null;
+        setScanError(t('scan_error_turnstile_failed'));
+    }
+
+    function _showTurnstileIfNeeded() {
+        const licenseKey = localStorage.getItem('focus_license_key') || '';
+        const wrapper    = document.getElementById('turnstile-wrapper');
+        if (!wrapper) return;
+        // Turnstile nur für Free-Tier anzeigen
+        if (!licenseKey) {
+            wrapper.classList.remove('hidden');
+        } else {
+            wrapper.classList.add('hidden');
+        }
+    }
+
     async function startAIScan() {
         if (!_scanImageBase64) { setScanError(t('scan_no_image')); return; }
 
@@ -1880,6 +1928,12 @@ You have the right to object at any time to the processing of personal data conc
             if ((appState.scanCount || 0) >= FREE_TRIAL_LIMIT) {
                 setScanError(t('scan_error_limit_reached'));
                 openSettingsModal();
+                return;
+            }
+            // Turnstile-Token prüfen (nur Free-Tier)
+            if (!_turnstileToken) {
+                setScanError(t('scan_error_turnstile_required'));
+                _showTurnstileIfNeeded();
                 return;
             }
         }
@@ -1896,13 +1950,19 @@ You have the right to object at any time to the processing of personal data conc
         try {
             if (loaderText) loaderText.textContent = t('scan_loader_ai');
 
+            const requestBody = { image: _scanImageBase64 };
+            // Turnstile-Token nur für Free-Tier mitsenden
+            if (!licenseKey && _turnstileToken) {
+                requestBody.turnstileToken = _turnstileToken;
+            }
+
             const response = await fetch('/api/scan', {
                 method: 'POST',
                 headers: {
                     'Content-Type':  'application/json',
                     'Authorization': `Bearer ${licenseKey || 'FREE_TRIAL'}`
                 },
-                body: JSON.stringify({ image: _scanImageBase64 }),
+                body: JSON.stringify(requestBody),
             });
 
             if (!response.ok) {
@@ -1912,6 +1972,16 @@ You have the right to object at any time to the processing of personal data conc
                 // HTTP 429 → Scan-Limit erreicht
                 if (response.status === 429) {
                     throw new Error('LIMIT_REACHED');
+                }
+
+                // HTTP 403 + turnstile → Turnstile-Fehler
+                if (response.status === 403 && errData.turnstile) {
+                    // Token ist verbraucht/ungültig → zurücksetzen, Widget neu rendern
+                    _turnstileToken = null;
+                    if (window.turnstile) {
+                        window.turnstile.reset('#turnstile-widget');
+                    }
+                    throw new Error(t('scan_error_turnstile_failed'));
                 }
 
                 // HTTP 403 → Temporärer Cooldown (z.B. nach Policy-Verstoß)
@@ -1956,6 +2026,12 @@ You have the right to object at any time to the processing of personal data conc
             if (previewImg)  { previewImg.src = ''; previewImg.classList.add('hidden'); }
             if (placeholder) { placeholder.classList.remove('hidden'); }
             scanBtn.disabled = true;
+
+            // Token ist Single-Use → nach erfolgreichem Scan zurücksetzen
+            _turnstileToken = null;
+            if (window.turnstile) {
+                window.turnstile.reset('#turnstile-widget');
+            }
 
             // Scan-Zähler: bevorzugt echten Stand vom Backend übernehmen
             if (data.usage && data.usage.current) {
@@ -2733,8 +2809,6 @@ You have the right to object at any time to the processing of personal data conc
     } else {
         console.warn('⚠️ Dieser Browser unterstützt keine Service Worker (PWA-Features).');
     }
-
-
     </script>
 </body>
 </html>
