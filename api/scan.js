@@ -161,15 +161,36 @@ async function redisExists(key) {
 }
 
 // LPUSH + LTRIM – Security-Log (max. 500 Einträge, DSGVO-konform)
+//
+// SERVERLESS-LOGGING-FIX:
+//   Vercel friert den Serverless-Container exakt nach dem Senden der HTTP-Response
+//   ein ("freeze"). Alle noch laufenden Promises werden dabei abgewürgt – fire-and-
+//   forget-Calls gehen also verloren wenn sie nach dem return-Statement stehen.
+//
+//   Lösung: redisLog ist eine echte async-Funktion die mit await aufgerufen wird,
+//   BEVOR das return/res.status()-Statement ausgeführt wird. So ist der Log-Eintrag
+//   garantiert committed bevor der Container einfriert.
+//
+//   Fehler im Logging dürfen den Hauptpfad nie blockieren → try/catch intern,
+//   kein Weiterwurfen. Ein fehlgeschlagener Log-Eintrag ist besser als eine
+//   fehlgeschlagene API-Response.
 async function redisLog(event, hashedId) {
   const entry = JSON.stringify({
     event,
     hashed_id: hashedId,
     ts: new Date().toISOString(),
   });
-  redisCall(`/lpush/${encodeURIComponent('security_log')}/${encodeURIComponent(entry)}`, 'POST')
-    .then(() => redisCall('/ltrim/security_log/0/499', 'POST'))
-    .catch(err => console.error('[SECURITY LOG] Fehler:', err));
+  try {
+    await redisCall(
+      `/lpush/${encodeURIComponent('security_log')}/${encodeURIComponent(entry)}`,
+      'POST'
+    );
+    await redisCall('/ltrim/security_log/0/499', 'POST');
+  } catch (err) {
+    // Logging-Fehler werden geloggt aber nicht weitergeworfen –
+    // ein fehlgeschlagener Log darf nie eine API-Response verhindern.
+    console.error('[SECURITY LOG] Fehler:', err);
+  }
 }
 
 // ── Upstash KV: GET/SET/DECR (für Lizenz-Key Scan-Konten) ─────────────────
@@ -296,7 +317,18 @@ export default async function handler(req, res) {
   const licenseKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
 
   // Modus bestimmen
-  const isMasterKey   = licenseKey === process.env.SECRET_MASTER_KEY;
+  // SECURITY: Defensive Master-Key-Prüfung.
+  //   Problem ohne Boolean()-Guard:
+  //     Wenn SECRET_MASTER_KEY nicht gesetzt ist, hat process.env.SECRET_MASTER_KEY
+  //     den Wert `undefined`. licenseKey ist nach dem Trim() oben mindestens ''.
+  //     '' === undefined → false  ✓ (zufällig korrekt, aber aus falschem Grund)
+  //     Aber: Wenn die Variable auf einen Leerstring gesetzt wird (''),
+  //     dann ist '' === '' → true → jeder Request ohne Auth-Header wird Master!
+  //   Mit Boolean()-Guard: Boolean('') → false, Boolean(undefined) → false.
+  //   Ein Master-Key-Match ist damit nur möglich wenn die Env-Variable
+  //   existiert, nicht leer ist UND exakt mit dem gesendeten Key übereinstimmt.
+  const isMasterKey   = Boolean(process.env.SECRET_MASTER_KEY) &&
+                        licenseKey === process.env.SECRET_MASTER_KEY;
   const isFreeTrial   = !licenseKey || licenseKey === 'FREE_TRIAL';
   const isPaidLicense = !isMasterKey && !isFreeTrial;
 
@@ -464,7 +496,9 @@ export default async function handler(req, res) {
         const blacklistKey = `blacklist:${hashedId}`;
 
         await redisSet(blacklistKey, 'policy_cooldown', POLICY_COOLDOWN_SEC).catch(() => {});
-        redisLog('OPENAI_POLICY_VIOLATION', hashedId);
+        // await statt fire-and-forget: Log muss committed sein bevor Vercel
+        // den Container nach dem return einfriert (siehe Kommentar in redisLog).
+        await redisLog('OPENAI_POLICY_VIOLATION', hashedId);
 
         console.warn(`[SECURITY] Content-Policy-Verletzung – 15-Min-Cooldown gesetzt (Hash: ${hashedId.slice(0, 8)}...)`);
 

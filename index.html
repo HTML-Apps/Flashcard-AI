@@ -1375,6 +1375,8 @@ You have the right to object at any time to the processing of personal data conc
         accent:              'indigo',
         lastBackupWordCount: 0,
         lastLearnDeckId:     null,
+        lastCardIndex:       0,      // Kartenposition beim Tab-Wechsel
+        lastLearnMode:       'chrono', // Lernmodus beim Tab-Wechsel
         scanCount:           0,
         lastSelectedDeckIds: [],
         lastBackupDate:      null
@@ -2425,6 +2427,9 @@ You have the right to object at any time to the processing of personal data conc
 
     function setLearnMode(mode) {
         learnMode = mode;
+        // Modus in appState persistieren → überlebt Tab-Wechsel und Reload
+        appState.lastLearnMode = mode;
+        saveState();
         if (mode === 'random') {
             showLearnBanner('learn_mode_random');
             initRemainingIndices();
@@ -2485,16 +2490,38 @@ You have the right to object at any time to the processing of personal data conc
         const diffDeck = decks.find(d => d.id === 'difficult_deck');
         const diffCount = diffDeck ? diffDeck.words.length : 0;
 
-        // Immer Session wiederherstellen wenn lastLearnDeckId gesetzt ist
+        // ── Tab-Wechsel-Wiederherstellung ─────────────────────────────────────
+        // Problem: startLearnSession() setzt currentCardIndex immer auf 0 zurück.
+        // Beim Tab-Wechsel wollen wir aber exakt an der gespeicherten Position
+        // weitermachen, ohne eine "neue" Session zu beginnen.
+        //
+        // Lösung: Zwei separate Pfade –
+        //   A) _learnWords ist noch im Speicher (Tab wurde nur versteckt, kein Reload):
+        //      Direkt die UI wiederherstellen ohne startLearnSession() aufzurufen.
+        //      currentCardIndex und learnMode sind noch korrekt im Speicher.
+        //   B) Nach Reload: startLearnSession() aufrufen, aber lastCardIndex aus
+        //      appState wiederherstellen (statt auf 0 zu setzen).
+        //
+        // Persistenz-Ebenen:
+        //   - currentCardIndex / learnMode: JS-Variablen (Tab-Wechsel = OK, Reload = verloren)
+        //   - appState.lastCardIndex / lastLearnMode: IndexedDB (überlebt Reload)
+        // ─────────────────────────────────────────────────────────────────────
+        const hasActiveSession = window._learnWords && window._learnWords.length > 0;
+
         if (appState.lastLearnDeckId === 'all' && decksWithWords.length > 0) {
+            if (hasActiveSession) { _restoreLearnSession(); return; }
             startLearnSession('all'); return;
         }
         if (appState.lastLearnDeckId === 'difficult' && diffCount > 0) {
+            if (hasActiveSession) { _restoreLearnSession(); return; }
             startLearnSession('difficult'); return;
         }
         if (appState.lastLearnDeckId && appState.lastLearnDeckId !== 'all' && appState.lastLearnDeckId !== 'difficult') {
             const savedDeck = decks.find(d => d.id === appState.lastLearnDeckId && d.id !== 'difficult_deck' && d.words.length > 0);
-            if (savedDeck) { startLearnSession(savedDeck.id); return; }
+            if (savedDeck) {
+                if (hasActiveSession) { _restoreLearnSession(); return; }
+                startLearnSession(savedDeck.id); return;
+            }
         }
 
         // Kein gespeicherter State: Selector anzeigen
@@ -2571,10 +2598,24 @@ You have the right to object at any time to the processing of personal data conc
         if (btnChrono) btnChrono.classList.toggle('active', learnMode === 'chrono');
         if (btnRandom) btnRandom.classList.toggle('active', learnMode === 'random');
 
-        currentCardIndex = 0;
+        // Nach Reload: gespeicherten Kartenindex wiederherstellen.
+        // Clamp gegen out-of-bounds (z.B. wenn Karten inzwischen gelöscht wurden).
+        const savedIdx = appState.lastCardIndex || 0;
+        currentCardIndex = (savedIdx > 0 && savedIdx < words.length) ? savedIdx : 0;
         isCardFlipped    = false;
+
+        // Lernmodus aus appState wiederherstellen (überlebt Reload)
+        const savedMode = appState.lastLearnMode || 'chrono';
+        if (savedMode !== learnMode) {
+            learnMode = savedMode;
+            const btnChrono2 = document.getElementById('learn-btn-chrono');
+            const btnRandom2 = document.getElementById('learn-btn-random');
+            if (btnChrono2) btnChrono2.classList.toggle('active', learnMode === 'chrono');
+            if (btnRandom2) btnRandom2.classList.toggle('active', learnMode === 'random');
+        }
+
         window._learnWords = words;
-        if(learnMode === 'random') initRemainingIndices();
+        if (learnMode === 'random') initRemainingIndices();
         updateLearnCounter();
         renderFlashcard();
     }
@@ -2583,8 +2624,31 @@ You have the right to object at any time to the processing of personal data conc
         currentLearnDeck = null;
         window._learnWords = [];
         appState.lastLearnDeckId = null;
+        appState.lastCardIndex   = 0;
+        appState.lastLearnMode   = 'chrono';
         saveState();
         initLearnView();
+    }
+
+    // ── _restoreLearnSession ───────────────────────────────────────────────
+    // Stellt die Lern-UI nach einem Tab-Wechsel wieder her, OHNE die Session
+    // neu zu initialisieren oder currentCardIndex zurückzusetzen.
+    // Aufgerufen von initLearnView() wenn _learnWords noch im Speicher ist.
+    function _restoreLearnSession() {
+        const label = document.getElementById('learn-deck-name-label')?.textContent || '';
+        document.getElementById('learn-deck-selector').classList.add('hidden');
+        document.getElementById('learn-session').classList.remove('hidden');
+
+        // Modus-Buttons korrekt markieren
+        const btnChrono = document.getElementById('learn-btn-chrono');
+        const btnRandom = document.getElementById('learn-btn-random');
+        if (btnChrono) btnChrono.classList.toggle('active', learnMode === 'chrono');
+        if (btnRandom) btnRandom.classList.toggle('active', learnMode === 'random');
+
+        // Karte an exakter Position neu rendern (kein Index-Reset)
+        isCardFlipped = false;
+        updateLearnCounter();
+        renderFlashcard();
     }
 
     function updateLearnCounter() {
@@ -2717,6 +2781,9 @@ You have the right to object at any time to the processing of personal data conc
                     : (currentCardIndex - 1 + words.length) % words.length;
             }
             isCardFlipped = false;
+            // Index persistieren: beim nächsten Tab-Wechsel/Reload hier weitermachen
+            appState.lastCardIndex = currentCardIndex;
+            saveState();
             renderFlashcard();
         }, 300);
     }
