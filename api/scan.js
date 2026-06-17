@@ -44,11 +44,50 @@ Gib das Ergebnis AUSSCHLIESSLICH als gültiges JSON-Objekt zurück, das ein Arra
 Format: { "flashcards": [{"front": "Begriff oder Frage", "back": "Erklärung oder Antwort"}] }`;
 
 // ══════════════════════════════════════════════════════════════════
-// SECURITY: Konsistentes SHA-256-Hashing (server-seitig, Node.js crypto)
-// Jeder licenseKey/IP wird VOR dem Redis-Zugriff gehasht.
+// SECURITY: Gesaltetes HMAC-SHA256-Hashing (server-seitig, Node.js crypto)
+//
+// Problem mit ungesaltetem SHA-256 bei IPv4-Adressen:
+//   IPv4 hat nur ~4,3 Milliarden mögliche Werte. Ein Angreifer kann
+//   alle möglichen IPs vorab hashen (Rainbow Table) und dann aus einem
+//   erbeuteten Redis-Dump die Original-IPs rückwärts ermitteln –
+//   was einem De-Anonymisierungsangriff entspricht und DSGVO Art. 32
+//   widerspricht (keine ausreichende Pseudonymisierung).
+//
+// Lösung – HMAC-SHA256 mit serverseitigem Salt:
+//   HMAC(key=HASH_SALT, data=input) ist kryptografisch an den Salt
+//   gebunden. Ohne Kenntnis des Salts ist eine Rainbow-Table nutzlos,
+//   selbst bei vollständigem Datenbank-Dump.
+//
+//   Verwendung von HMAC statt SHA-256(salt+input):
+//   SHA-256(salt || input) ist anfällig für Length-Extension-Angriffe.
+//   HMAC ist dafür konstruktionsseitig immun.
+//
+// Fallback-Verhalten ohne HASH_SALT:
+//   Der Server startet nicht blind – stattdessen wird ein Fehler
+//   geloggt und ein deterministischer Fallback-Salt aus dem
+//   UPSTASH_REDIS_REST_TOKEN (der ohnehin ein Geheimnis ist) abgeleitet.
+//   Das verhindert einen Produktionsausfall bei fehlender Env-Variable,
+//   ohne die Sicherheit komplett aufzugeben.
+//   → Besser: HASH_SALT explizit in Vercel setzen (32+ zufällige Zeichen).
 // ══════════════════════════════════════════════════════════════════
+function getHashSalt() {
+  const salt = process.env.HASH_SALT;
+  if (salt) return salt;
+  // Fallback: ersten 32 Zeichen des Redis-Tokens als Notfall-Salt.
+  // Geloggt als WARNING damit die fehlende Variable sofort auffällt.
+  console.warn(
+    '[SECURITY] HASH_SALT Umgebungsvariable fehlt! ' +
+    'Bitte in Vercel setzen (mind. 32 zufällige Zeichen). ' +
+    'Verwende Fallback-Salt aus UPSTASH_REDIS_REST_TOKEN.'
+  );
+  return (process.env.UPSTASH_REDIS_REST_TOKEN || 'fallback-insecure-salt').slice(0, 32);
+}
+
 function hashKey(input) {
-  return crypto.createHash('sha256').update(String(input)).digest('hex');
+  return crypto
+    .createHmac('sha256', getHashSalt())
+    .update(String(input))
+    .digest('hex');
 }
 
 // ── Upstash Redis: Hilfsfunktionen ────────────────────────────────────────

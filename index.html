@@ -1839,6 +1839,28 @@ You have the right to object at any time to the processing of personal data conc
     function handleImageSelected(event) {
         const file = event.target.files[0];
         if (!file) return;
+
+        // ── Dateigrößen-Schutz: max. 15 MB ───────────────────────────────────
+        // Warum client-seitig und nicht nur im Backend?
+        //   FileReader.readAsDataURL() lädt die komplette Datei in den
+        //   JS-Heap des Browsers. Ein 50-MB-HEIC vom iPhone erzeugt einen
+        //   ~67-MB-Base64-String – das reicht auf Low-End-Android-Geräten
+        //   für einen Out-of-Memory-Absturz, bevor das Backend überhaupt
+        //   eine Chance hat zu prüfen. Der Check hier verhindert das Laden
+        //   der Datei in den Speicher komplett.
+        //   Das Backend-Limit (4 MB Body-Limit in Vercel) bleibt als zweite
+        //   Verteidigungslinie trotzdem aktiv.
+        const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15 MB
+        if (file.size > MAX_FILE_BYTES) {
+            setScanError(
+                currentLang === 'de'
+                    ? `Bild zu groß (${(file.size / 1024 / 1024).toFixed(1)} MB). Bitte ein Bild unter 15 MB wählen.`
+                    : `Image too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Please choose an image under 15 MB.`
+            );
+            event.target.value = ''; // Input zurücksetzen damit dieselbe Datei erneut triggerbar bleibt
+            return;
+        }
+
         setScanError('');
         const reader = new FileReader();
         reader.onload = function(e) {
