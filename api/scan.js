@@ -46,7 +46,6 @@ Format: { "flashcards": [{"front": "Begriff oder Frage", "back": "Erklärung ode
 // ══════════════════════════════════════════════════════════════════
 // SECURITY: Konsistentes SHA-256-Hashing (server-seitig, Node.js crypto)
 // Jeder licenseKey/IP wird VOR dem Redis-Zugriff gehasht.
-// Dadurch stimmen Blacklist-Einträge und Blacklist-Checks immer überein.
 // ══════════════════════════════════════════════════════════════════
 function hashKey(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
@@ -56,35 +55,54 @@ function hashKey(input) {
 const REDIS_URL   = () => process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = () => process.env.UPSTASH_REDIS_REST_TOKEN;
 
-async function redisCall(path, method = 'GET') {
-  const res = await fetch(`${REDIS_URL()}${path}`, {
+async function redisCall(path, method = 'GET', body = null) {
+  const opts = {
     method,
     headers: { Authorization: `Bearer ${REDIS_TOKEN()}` },
-  });
+  };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${REDIS_URL()}${path}`, opts);
   if (!res.ok) throw new Error(`Redis ${method} ${path} failed: ${res.status}`);
   return res.json();
 }
 
-// INCR – Free-Trial IP-Zähler
-async function redisIncr(key) {
-  const json = await redisCall(`/incr/${encodeURIComponent(key)}`, 'POST');
-  return json.result;
-}
-
-// EXPIRE – setzt TTL auf einen bestehenden Key (nur wenn noch keine TTL gesetzt ist)
-async function redisExpire(key, ttlSeconds) {
-  // NX = setze TTL nur wenn der Key aktuell KEINE Ablaufzeit hat
-  // → verhindert, dass laufende Zähler bei jedem Request auf 24h zurückgesetzt werden
-  await redisCall(`/expire/${encodeURIComponent(key)}/${ttlSeconds}/NX`, 'POST');
-}
-
-// INCR + einmaliges EXPIRE beim ersten Zugriff (count === 1)
-// Setzt den 24h-TTL nur beim allerersten Scan einer IP – nie danach.
+// ══════════════════════════════════════════════════════════════════
+// ATOMIC INCR + EXPIRE via Upstash Pipeline
+//
+// Race-Condition-Problem ohne Pipeline:
+//   Request A: INCR → count=1
+//   Request B: INCR → count=2  (zwischen A's INCR und EXPIRE!)
+//   Request A: EXPIRE → TTL gesetzt
+//   Request B: EXPIRE wird nicht mehr aufgerufen (count !== 1)
+//   → Beide korrekt, aber B könnte EXPIRE überspringen wenn A crasht.
+//
+// Mit Pipeline: INCR und EXPIRE werden atomar in einem HTTP-Call
+// an Upstash geschickt. Upstash führt beide Befehle sequenziell
+// ohne Unterbrechung aus → keine Race-Condition möglich.
+//
+// Upstash Pipeline API: POST /pipeline mit Array von Befehlen.
+// Rückgabe: Array von Ergebnissen in gleicher Reihenfolge.
+// ══════════════════════════════════════════════════════════════════
 async function redisIncrWithTTL(key, ttlSeconds) {
-  const count = await redisIncr(key);
-  if (count === 1) {
-    // Erster Request dieser IP: TTL einmalig setzen
-    await redisExpire(key, ttlSeconds);
+  // Pipeline: [INCR key, EXPIRE key ttl NX]
+  // NX = setze TTL nur wenn der Key aktuell KEINE Ablaufzeit hat
+  //    → verhindert, dass laufende Zähler bei jedem Request auf 24h zurückgesetzt werden
+  const pipeline = [
+    ['INCR', key],
+    ['EXPIRE', key, ttlSeconds, 'NX'],
+  ];
+
+  const json = await redisCall('/pipeline', 'POST', pipeline);
+
+  // Pipeline-Antwort: [{result: <count>}, {result: 0|1}]
+  // result[0] = neuer Zählerstand nach INCR
+  // result[1] = 1 wenn EXPIRE gesetzt wurde, 0 wenn Key schon eine TTL hatte (NX)
+  const count = json?.[0]?.result;
+  if (typeof count !== 'number') {
+    throw new Error(`Redis Pipeline INCR returned unexpected result: ${JSON.stringify(json)}`);
   }
   return count;
 }
@@ -110,7 +128,6 @@ async function redisLog(event, hashedId) {
     hashed_id: hashedId,
     ts: new Date().toISOString(),
   });
-  // Beide Calls fire-and-forget – Logging darf nie den Hauptpfad blockieren
   redisCall(`/lpush/${encodeURIComponent('security_log')}/${encodeURIComponent(entry)}`, 'POST')
     .then(() => redisCall('/ltrim/security_log/0/499', 'POST'))
     .catch(err => console.error('[SECURITY LOG] Fehler:', err));
@@ -145,26 +162,45 @@ async function kvDecr(key) {
 }
 
 // ── IP-Adresse: Vercel-native Header, resistent gegen X-Forwarded-For-Spoofing
-// SECURITY: x-real-ip wird von Vercel's Edge-Infrastruktur gesetzt und kann
-// vom Client nicht manipuliert werden. X-Forwarded-For als letzter Fallback.
 function getClientIp(req) {
-  // Vercel setzt diesen Header zuverlässig auf der Edge-Ebene
   const realIp = req.headers['x-real-ip'];
   if (realIp) return realIp.trim();
 
-  // Vercel Geo/IP-Infrastruktur-Header (bei Vercel Pro verfügbar)
   const vercelIp = req.headers['x-vercel-forwarded-for'];
   if (vercelIp) return vercelIp.split(',')[0].trim();
 
-  // LETZTER Fallback: x-forwarded-for (manipulierbar, aber besser als nichts)
   const forwarded = req.headers['x-forwarded-for'];
   if (forwarded) return forwarded.split(',')[0].trim();
 
   return req.socket?.remoteAddress || 'unknown';
 }
 
-// ── Lemon Squeezy Lizenz validieren ───────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+// NEGATIVE CACHING für ungültige Lemon Squeezy Keys
+//
+// Problem ohne Caching:
+//   Jeder Request mit einem ungültigen Key triggert einen HTTP-Call
+//   an die Lemon Squeezy API → Brute-Force möglich, Vercel-IP kann
+//   von LS gesperrt werden, unnötige Latenz.
+//
+// Lösung:
+//   1. Vor dem LS-API-Call: Redis prüfen ob Key bereits als ungültig
+//      bekannt ist (ls_invalid:<hash>).
+//   2. Nach einem ungültigen LS-Response: Key 10 Min. in Redis cachen.
+//   3. Folge-Requests mit gleichem Key werden sofort mit 403 abgelehnt,
+//      ohne die LS API erneut zu kontaktieren.
+// ══════════════════════════════════════════════════════════════════
 async function validateLemonSqueezy(licenseKey) {
+  // Schritt 1: Negative-Cache prüfen (kein LS-API-Call nötig wenn gecacht)
+  const invalidCacheKey = `ls_invalid:${hashKey(licenseKey)}`;
+  const isCachedInvalid = await redisExists(invalidCacheKey);
+  if (isCachedInvalid) {
+    console.warn('[BLOCKIERT] Ungültiger Key aus Negative-Cache abgelehnt (kein LS-Call).');
+    return { valid: false, fromCache: true };
+  }
+
+  // Schritt 2: Lemon Squeezy API aufrufen
+  console.log('[LEMON SQUEEZY] Validiere Key...');
   const res = await fetch('https://api.lemonsqueezy.com/v1/licenses/validate', {
     method: 'POST',
     headers: {
@@ -174,7 +210,17 @@ async function validateLemonSqueezy(licenseKey) {
     body: new URLSearchParams({ license_key: licenseKey }),
   });
   const data = await res.json();
-  return data.valid === true;
+  const valid = data.valid === true;
+
+  // Schritt 3: Ungültigen Key im Negative-Cache speichern
+  if (!valid) {
+    console.warn('[BLOCKIERT] Ungültiger Lizenzschlüssel – wird 10 Min. gecacht.');
+    await redisSet(invalidCacheKey, 'invalid', INVALID_KEY_CACHE_SEC).catch(err =>
+      console.error('[NEGATIVE CACHE] Schreiben fehlgeschlagen:', err)
+    );
+  }
+
+  return { valid, fromCache: false };
 }
 
 // ── Cloudflare Turnstile Token validieren ─────────────────────────────────
@@ -219,7 +265,6 @@ export default async function handler(req, res) {
 
   // ════════════════════════════════════════════════════════════════
   // TURNSTILE: Bot-Schutz für Free-Tier-Zugriff
-  // Nur für Free-Trial erforderlich – Paid-Lizenzen und Master-Key überspringen.
   // ════════════════════════════════════════════════════════════════
   if (isFreeTrial) {
     const { turnstileToken } = req.body || {};
@@ -239,13 +284,10 @@ export default async function handler(req, res) {
   }
 
   // ════════════════════════════════════════════════════════════════
-  // SECURITY: Blacklist-Check mit konsistentem SHA-256-Hash
-  // Der licenseKey wird VOR dem Redis-Lookup gehasht, genau wie beim Eintragen.
-  // Dadurch stimmt der Vergleich immer – der Bug aus der vorherigen Version ist behoben.
+  // SECURITY: Blacklist-Check
   // ════════════════════════════════════════════════════════════════
   if (!isMasterKey) {
     try {
-      // Identifier: Lizenzschlüssel bei paid, IP bei free trial
       const identifier    = isFreeTrial ? getClientIp(req) : licenseKey;
       const hashedId      = hashKey(identifier);
       const blacklistKey  = `blacklist:${hashedId}`;
@@ -259,7 +301,6 @@ export default async function handler(req, res) {
         });
       }
     } catch (err) {
-      // Check-Fehler blockiert nicht den Betrieb
       console.error('[SECURITY] Blacklist-Check fehlgeschlagen:', err);
     }
   }
@@ -270,14 +311,21 @@ export default async function handler(req, res) {
   try {
 
     // ════════════════════════════════════════════════════════════════
-    // A) FREE TRIAL – IP-basiertes Throttling via Redis INCR
-    //    SECURITY: IP kommt aus x-real-ip (Vercel Edge), nicht aus
-    //    dem manipulierbaren X-Forwarded-For-Header.
-    //    TTL: 24h ab erstem Request – verhindert Dauer-Bann bei dynamischen IPs.
+    // A) FREE TRIAL – Atomares IP-Throttling via Redis Pipeline
+    //
+    // INCR und EXPIRE werden in einem einzigen atomaren Pipeline-Call
+    // ausgeführt. Das verhindert Race-Conditions bei gleichzeitigen
+    // Requests von derselben IP:
+    //   - Ohne Pipeline: INCR→1, crash vor EXPIRE → Key läuft nie ab
+    //   - Mit Pipeline:  INCR+EXPIRE(NX) atomar → TTL immer gesetzt
+    //
+    // EXPIRE NX = nur setzen wenn noch keine TTL existiert
+    //   → Die 24h laufen ab dem ersten Request dieser IP, nicht ab
+    //     jedem weiteren Request (kein "Rolling Window").
     // ════════════════════════════════════════════════════════════════
     if (isFreeTrial) {
       const ip       = getClientIp(req);
-      const redisKey = `free_trial_ip:${hashKey(ip)}`; // IP ebenfalls hashen
+      const redisKey = `free_trial_ip:${hashKey(ip)}`;
       const count    = await redisIncrWithTTL(redisKey, FREE_TRIAL_TTL_SEC);
 
       console.log(`[FREE TRIAL] Zähler: ${count}/${FREE_TRIAL_LIMIT}`);
@@ -290,6 +338,7 @@ export default async function handler(req, res) {
 
     // ════════════════════════════════════════════════════════════════
     // B) PAID LICENSE – Lemon Squeezy + KV Scan-Konto
+    //    Negative Caching ist jetzt in validateLemonSqueezy() integriert.
     // ════════════════════════════════════════════════════════════════
     if (isPaidLicense) {
       if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
@@ -302,23 +351,13 @@ export default async function handler(req, res) {
       console.log(`[KV GET] Scans verbleibend: ${scansLeft}`);
 
       if (scansLeft === null || isNaN(scansLeft)) {
-        // ── Negative-Cache-Check: War dieser Key schon mal ungültig? ──────────
-        // Verhindert Brute-Force gegen die Lemon-Squeezy-API (Vercel-IP-Bann-Schutz).
-        // Ungültige Keys werden 10 Min. in Redis gecacht – kein erneuter API-Call nötig.
-        const invalidCacheKey = `ls_invalid:${hashKey(licenseKey)}`;
-        const isCachedInvalid = await redisExists(invalidCacheKey);
-        if (isCachedInvalid) {
-          console.warn('[BLOCKIERT] Ungültiger Key aus Negative-Cache abgelehnt (kein LS-Call).');
-          return res.status(403).json({ error: 'Ungültiger oder abgelaufener Lizenzschlüssel.' });
-        }
-
-        console.log('[LEMON SQUEEZY] Validiere Key...');
-        const valid = await validateLemonSqueezy(licenseKey);
+        // validateLemonSqueezy() prüft Negative-Cache intern,
+        // ruft LS-API nur wenn nötig, und schreibt bei Fehler in Cache.
+        const { valid, fromCache } = await validateLemonSqueezy(licenseKey);
 
         if (!valid) {
-          console.warn('[BLOCKIERT] Ungültiger Lizenzschlüssel – wird 10 Min. gecacht.');
-          // Negative-Cache: ungültigen Key mit TTL in Redis speichern
-          await redisSet(invalidCacheKey, 'invalid', INVALID_KEY_CACHE_SEC).catch(() => {});
+          const reason = fromCache ? 'aus Cache' : 'von LS-API';
+          console.warn(`[BLOCKIERT] Ungültiger Lizenzschlüssel (${reason}).`);
           return res.status(403).json({ error: 'Ungültiger oder abgelaufener Lizenzschlüssel.' });
         }
 
@@ -370,10 +409,7 @@ export default async function handler(req, res) {
     });
 
     // ════════════════════════════════════════════════════════════════
-    // SECURITY: OpenAI Content-Policy-Fehler → temporärer Cooldown (15 Min.)
-    // KEIN permanenter Ban, da False Positives bei Medizin/Jura-Inhalten
-    // (Dermatologie-Bilder, juristische Fallanalysen etc.) häufig vorkommen.
-    // Der Vorfall wird intern geloggt für manuelles Admin-Review.
+    // SECURITY: OpenAI Content-Policy-Fehler → temporärer Cooldown
     // ════════════════════════════════════════════════════════════════
     if (!openAIResponse.ok) {
       const errBody = await openAIResponse.json().catch(() => ({}));
@@ -388,10 +424,7 @@ export default async function handler(req, res) {
         const hashedId     = hashKey(identifier);
         const blacklistKey = `blacklist:${hashedId}`;
 
-        // Temporäre Sperre mit TTL (15 Minuten), kein permanenter Eintrag
         await redisSet(blacklistKey, 'policy_cooldown', POLICY_COOLDOWN_SEC).catch(() => {});
-
-        // Internes Logging für Admin-Review (DSGVO-konform: nur Hash, kein Klartext)
         redisLog('OPENAI_POLICY_VIOLATION', hashedId);
 
         console.warn(`[SECURITY] Content-Policy-Verletzung – 15-Min-Cooldown gesetzt (Hash: ${hashedId.slice(0, 8)}...)`);
@@ -399,7 +432,6 @@ export default async function handler(req, res) {
         return res.status(400).json({
           error:    'Dieses Bild konnte nicht verarbeitet werden. Bitte versuche es mit einem anderen Bild.',
           cooldown: true,
-          // Kein "ban: true" – Frontend setzt keinen permanenten lokalen Ban
         });
       }
 

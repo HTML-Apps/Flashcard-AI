@@ -25,7 +25,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <!-- Cloudflare Turnstile -->
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad" async defer></script>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -1891,35 +1891,115 @@ You have the right to object at any time to the processing of personal data conc
     }
 
     // ── Turnstile Callbacks ──
-    let _turnstileToken  = null;
-    let _scanAttempted   = false; // Flag: wird true wenn Nutzer aktiv auf "Scannen" drückt
+    let _turnstileToken    = null;
+    let _scanAttempted     = false; // Flag: wird true wenn Nutzer aktiv auf "Scannen" drückt
+    let _turnstileReady    = false; // Flag: Cloudflare-Skript vollständig geladen
+    let _turnstileRendered = false; // Flag: Widget bereits gerendert (kein Doppel-Render)
+
+    // ════════════════════════════════════════════════════════════════
+    // onTurnstileLoad – wird vom Cloudflare-Skript via ?onload= aufgerufen
+    //
+    // Race-Condition-Problem (Fehler 400020) ohne onload:
+    //   Das Skript lädt async. Falls _showTurnstileIfNeeded() ausgeführt
+    //   wird bevor window.turnstile definiert ist, schlägt turnstile.render()
+    //   mit "400020: Invalid sitekey" oder einem TypeError fehl.
+    //
+    // Lösung:
+    //   Cloudflare ruft onTurnstileLoad() auf sobald das Skript vollständig
+    //   ausgeführt und window.turnstile bereit ist. Erst dann rendern wir.
+    //   Das ?onload=onTurnstileLoad Query-Param im Script-Tag aktiviert dies.
+    // ════════════════════════════════════════════════════════════════
+    function onTurnstileLoad() {
+        _turnstileReady = true;
+        // Falls _showTurnstileIfNeeded() bereits aufgerufen wurde (View war schon aktiv),
+        // jetzt nachholen was damals übersprungen wurde.
+        const wrapper = document.getElementById('turnstile-wrapper');
+        if (wrapper && !wrapper.classList.contains('hidden') && !_turnstileRendered) {
+            _renderTurnstileWidget();
+        }
+    }
 
     function onTurnstileSuccess(token) {
         _turnstileToken = token;
+        // Scan-Button aktivieren sobald Token vorliegt und Bild gewählt
+        const scanBtn = document.getElementById('scan-btn');
+        if (scanBtn && window._scanImageBase64) {
+            scanBtn.disabled = false;
+        }
     }
 
     function onTurnstileExpired() {
         _turnstileToken = null;
     }
 
-    function onTurnstileError() {
+    // ════════════════════════════════════════════════════════════════
+    // onTurnstileError – Fehler-Callback des Cloudflare Turnstile Widgets
+    //
+    // Häufige Ursachen:
+    //   - Netzwerkfehler / Cloudflare nicht erreichbar
+    //   - Ungültiger Site-Key (Dev-Umgebung)
+    //   - Browser blockiert Cloudflare-Ressourcen (z.B. Ad-Blocker)
+    //
+    // Design-Entscheidungen:
+    //   1. Kein console.error() – verhindert Log-Flooding bei wiederkehrenden Fehlern
+    //   2. Scan-Button deaktivieren – verhindert Scan ohne funktionierenden Bot-Schutz
+    //   3. Benutzerfreundliche Meldung nur anzeigen wenn relevant (nach Scan-Versuch
+    //      ODER wenn Widget bereits sichtbar war → Nutzer erwartet Funktion)
+    //   4. _scanAttempted-Guard bleibt für den Fall dass der Fehler beim initialen
+    //      Widget-Laden in Dev-Umgebungen auftritt (kein False-Positive für den User)
+    // ════════════════════════════════════════════════════════════════
+    function onTurnstileError(errorCode) {
         _turnstileToken = null;
-        // Nur Fehlermeldung anzeigen wenn der Nutzer aktiv einen Scan gestartet hat,
-        // nicht beim initialen Widget-Laden (z.B. ungültiger Site-Key in Dev-Umgebung).
-        if (_scanAttempted) {
-            setScanError(t('scan_error_turnstile_failed'));
+
+        // Scan-Button deaktivieren – ohne Token darf kein Scan starten
+        const scanBtn = document.getElementById('scan-btn');
+        if (scanBtn) {
+            scanBtn.disabled = true;
         }
+
+        // Nur loggen auf debug-Level, kein console.error() → kein Log-Flooding
+        console.warn(`[Turnstile] Widget-Fehler (Code: ${errorCode || 'unbekannt'})`);
+
+        // Nutzer informieren: nur wenn Scan aktiv versucht wurde ODER Widget bereits
+        // sichtbar war (Nutzer sieht das Widget und erwartet dass es funktioniert)
+        const wrapper = document.getElementById('turnstile-wrapper');
+        const widgetVisible = wrapper && !wrapper.classList.contains('hidden');
+        if (_scanAttempted || widgetVisible) {
+            setScanError(
+                currentLang === 'de'
+                    ? 'Sicherheitsprüfung fehlgeschlagen. Bitte Seite neu laden.'
+                    : 'Security check failed. Please reload the page.'
+            );
+        }
+    }
+
+    // ── Internes Render-Helper (verhindert Doppel-Rendering) ──────
+    function _renderTurnstileWidget() {
+        if (_turnstileRendered || !window.turnstile) return;
+        // Vorhandenes Widget zurücksetzen falls vorhanden
+        try {
+            window.turnstile.reset('#turnstile-widget');
+        } catch (_) { /* Widget war noch nicht gerendert – ignorieren */ }
+        _turnstileRendered = true;
     }
 
     function _showTurnstileIfNeeded() {
         const licenseKey = localStorage.getItem('focus_license_key') || '';
         const wrapper    = document.getElementById('turnstile-wrapper');
         if (!wrapper) return;
-        // Turnstile nur für Free-Tier anzeigen
+
         if (!licenseKey) {
+            // Free-Tier: Widget anzeigen
             wrapper.classList.remove('hidden');
+            // Nur rendern wenn Cloudflare-Skript bereits vollständig geladen ist.
+            // Falls nicht: onTurnstileLoad() wird später aufgerufen und holt das nach.
+            if (_turnstileReady && !_turnstileRendered) {
+                _renderTurnstileWidget();
+            }
         } else {
+            // Paid-Tier: Widget ausblenden
             wrapper.classList.add('hidden');
+            _turnstileToken = null;
         }
     }
 
