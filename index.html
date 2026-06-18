@@ -461,14 +461,7 @@
 
                     <!-- Cloudflare Turnstile Widget (nur für Free-Tier sichtbar) -->
                     <div id="turnstile-wrapper" class="hidden w-full flex justify-center">
-                        <div id="turnstile-widget"
-                             class="cf-turnstile"
-                             data-sitekey="0x4AAAAAADmDM0vIb4pbgSD9"
-                             data-theme="auto"
-                             data-callback="onTurnstileSuccess"
-                             data-expired-callback="onTurnstileExpired"
-                             data-error-callback="onTurnstileError">
-                        </div>
+                        <div id="turnstile-widget"></div>
                     </div>
 
                     <button id="scan-btn" onclick="startAIScan()" disabled class="w-full accent-bg accent-bg-hover text-white py-4 rounded-2xl font-bold accent-shadow transition-colors active:scale-95 flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">
@@ -2000,11 +1993,32 @@ You have the right to object at any time to the processing of personal data conc
     // ── Internes Render-Helper (verhindert Doppel-Rendering) ──────
     function _renderTurnstileWidget() {
         if (_turnstileRendered || !window.turnstile) return;
-        // Vorhandenes Widget zurücksetzen falls vorhanden
-        try {
-            window.turnstile.reset('#turnstile-widget');
-        } catch (_) { /* Widget war noch nicht gerendert – ignorieren */ }
+        // BUGFIX Fehler 600010:
+        //   cf-turnstile Klasse → Cloudflare rendert Widget sofort beim Skript-Load,
+        //   auch wenn Container noch `hidden` ist → Fehler 600010 ("widget not found
+        //   in visible area") → onTurnstileError() feuert sofort.
+        //   Fix: cf-turnstile Klasse entfernt. Explizites render() erst nachdem
+        //   hidden-Klasse weg ist. Alle Optionen (sitekey, callbacks) programmatisch.
         _turnstileRendered = true;
+        try {
+            window.turnstile.render('#turnstile-widget', {
+                sitekey:            '0x4AAAAAADmDM0vIb4pbgSD9',
+                theme:              'auto',
+                callback:           onTurnstileSuccess,
+                'expired-callback': onTurnstileExpired,
+                'error-callback':   onTurnstileError,
+            });
+        } catch (err) {
+            console.warn('[Turnstile] render() fehlgeschlagen:', err);
+            _turnstileRendered = false; // Retry beim nächsten Aufruf erlauben
+        }
+    }
+
+    function _resetTurnstileWidget() {
+        _turnstileToken = null;
+        if (!window.turnstile || !_turnstileRendered) return;
+        try { window.turnstile.reset('#turnstile-widget'); } catch (_) {}
+        _turnstileRendered = false; // neues render() beim nächsten show erlauben
     }
 
     function _showTurnstileIfNeeded() {
@@ -2090,7 +2104,7 @@ You have the right to object at any time to the processing of personal data conc
                     // Token ist verbraucht/ungültig → zurücksetzen, Widget neu rendern
                     _turnstileToken = null;
                     if (window.turnstile) {
-                        window.turnstile.reset('#turnstile-widget');
+                        _resetTurnstileWidget();
                     }
                     throw new Error(t('scan_error_turnstile_failed'));
                 }
@@ -2142,7 +2156,7 @@ You have the right to object at any time to the processing of personal data conc
             _turnstileToken  = null;
             _scanAttempted   = false;
             if (window.turnstile) {
-                window.turnstile.reset('#turnstile-widget');
+                _resetTurnstileWidget();
             }
 
             // Scan-Zähler: bevorzugt echten Stand vom Backend übernehmen
