@@ -25,24 +25,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <!-- Cloudflare Turnstile -->
-    <!-- onTurnstileLoad muss GLOBAL verfügbar sein BEVOR das CF-Skript lädt.
-         Mit async/defer + ?onload= sucht CF die Funktion sofort nach dem Parsen
-         des Skripts – zu diesem Zeitpunkt ist der inline JS noch nicht ausgeführt.
-         Lösung: Stub hier definieren, echte Logik bleibt im inline-Script unten. -->
-    <script>
-        window.onTurnstileLoad = function() {
-            // Wird nach vollständigem Laden des Cloudflare-Skripts aufgerufen.
-            // Die echte Implementierung überschreibt diese Funktion sobald
-            // der inline-Script-Block weiter unten ausgeführt wird.
-            // Falls der inline-Block bereits lief (unwahrscheinlich aber möglich),
-            // direkt die finale Funktion aufrufen.
-            if (typeof window._onTurnstileLoadReady === "function") {
-                window._onTurnstileLoadReady();
-            } else {
-                window._turnstilePending = true;
-            }
-        };
-    </script>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad" async defer></script>
 
     <!-- Tailwind CSS -->
@@ -1944,26 +1926,15 @@ You have the right to object at any time to the processing of personal data conc
     //   ausgeführt und window.turnstile bereit ist. Erst dann rendern wir.
     //   Das ?onload=onTurnstileLoad Query-Param im Script-Tag aktiviert dies.
     // ════════════════════════════════════════════════════════════════
-    // ── Turnstile Load Bridge ──────────────────────────────────────────────
-    // onTurnstileLoad wird als globaler Stub im <head> definiert (vor dem CF-Script),
-    // damit Cloudflare die Funktion sofort nach dem Skript-Load findet.
-    // Hier überschreiben wir window.onTurnstileLoad mit der echten Implementierung
-    // UND registrieren _onTurnstileLoadReady als Brücke.
-    function _doTurnstileLoad() {
+    function onTurnstileLoad() {
         _turnstileReady = true;
+        // Falls _showTurnstileIfNeeded() bereits aufgerufen wurde (View war schon aktiv),
+        // jetzt nachholen was damals übersprungen wurde.
         const wrapper = document.getElementById('turnstile-wrapper');
         if (wrapper && !wrapper.classList.contains('hidden') && !_turnstileRendered) {
             _renderTurnstileWidget();
         }
     }
-    // Brücke: falls CF-Skript den Stub schon aufgerufen hat während wir noch luden
-    window._onTurnstileLoadReady = _doTurnstileLoad;
-    if (window._turnstilePending) {
-        // CF hat onTurnstileLoad bereits gefeuert → sofort nachholen
-        _doTurnstileLoad();
-    }
-    // Auch direkten Aufruf abdecken (falls CF erneut feuert)
-    window.onTurnstileLoad = _doTurnstileLoad;
 
     function onTurnstileSuccess(token) {
         _turnstileToken = token;

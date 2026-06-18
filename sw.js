@@ -1,117 +1,112 @@
-// sw.js – Flashcard-AI Service Worker
-const CACHE_NAME = "Flashcard-AI_v5";
+// sw.js - Gemergte & optimierte Version für Flashcard-AI
+const CACHE_NAME = "Flashcard-AI_v4"; // Version erhöht: Tailwind CDN auf jsDelivr umgestellt
 
-// ── Core-Assets: Nur lokale Dateien in addAll() ──────────────────────────────
-// WICHTIG: cache.addAll() schlägt komplett fehl wenn EINE URL fehlschlägt.
-// Externe CDN-URLs haben CORS-Einschränkungen, Redirects oder Rate-Limits
-// die addAll() zum Absturz bringen → daher NUR lokale Assets hier.
-// CDN-Ressourcen werden lazy beim ersten Fetch gecacht (siehe unten).
-const CORE_ASSETS = [
+// Assets, die für den vollständigen Offline-Betrieb zwingend benötigt werden
+const ASSETS_TO_CACHE = [
   "./",
   "./index.html",
   "./manifest.json",
   "./brain.png",
-  "./src/output.css",
+  
+  // Externe CDNs (Sicherheitsnetz für Offline-Modus)
+  // jsDelivr setzt korrekte CORS-Header → SW kann cachen (cdn.tailwindcss.com konnte das nicht)
+  "https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.16/tailwindcss.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
+  "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css",
+  "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"
 ];
 
-// ── CDN-Assets: Lazy gecacht beim ersten echten Request ──────────────────────
-// Diese URLs werden NICHT in addAll() geladen, sondern beim ersten
-// Netzwerk-Request automatisch in den Cache geschrieben.
-const CDN_ORIGINS = [
-  "cdnjs.cloudflare.com",
-  "cdn.jsdelivr.net",
-  "challenges.cloudflare.com",
-];
-
-// ── Install: Nur lokale Core-Assets vorab cachen ─────────────────────────────
+// 1. Installieren: Core-Assets & CDNs direkt in den Cache laden
 self.addEventListener("install", (event) => {
+  // Erzwingt das sofortige Übernehmen des neuen Workers (aus deinem originalen Code)
   self.skipWaiting();
+  
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log("[Service Worker] Caching Core-Assets für Version:", CACHE_NAME);
-      // addAll ist atomar – schlägt eine URL fehl, schlägt alles fehl.
-      // Daher nur lokale Assets die garantiert verfügbar sind.
-      return cache.addAll(CORE_ASSETS);
+      console.log("[Service Worker] Caching Core-Assets & CDNs für Version:", CACHE_NAME);
+      return cache.addAll(ASSETS_TO_CACHE);
     })
   );
 });
 
-// ── Activate: Alte Caches löschen ────────────────────────────────────────────
+// 2. Aktivieren: Alte Cache-Versionen aufräumen
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keyList) =>
-      Promise.all(
+    caches.keys().then((keyList) => {
+      return Promise.all(
         keyList.map((key) => {
           if (key !== CACHE_NAME) {
             console.log("[Service Worker] Lösche alten Cache:", key);
             return caches.delete(key);
           }
         })
-      )
-    )
+      );
+    })
   );
+  // Übernimmt sofort die Kontrolle über alle offenen Tabs (aus deinem originalen Code)
   return self.clients.claim();
 });
 
-// ── Fetch: Hybride Strategie ──────────────────────────────────────────────────
+// 3. Fetch: Intelligente Hybrid-Strategie (Network-First + Cache-First für Statics)
 self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-
-  // API-Calls nie cachen
+  // Externe APIs und Live-Daten von Drittanbietern immer ignorieren (aus deinem originalen Code)
   if (
-    event.request.url.includes("/api/") ||
-    event.request.url.includes("firestore") ||
-    event.request.url.includes("googleapis")
+    event.request.url.includes("firestore") || 
+    event.request.url.includes("googleapis") || 
+    event.request.url.includes("/api/")
   ) {
     return;
   }
 
-  // Turnstile-Challenge nie cachen (ändert sich bei jedem Request)
-  if (event.request.url.includes("challenges.cloudflare.com")) {
-    return;
-  }
+  const url = new URL(event.request.url);
 
-  const isCDN = CDN_ORIGINS.some((origin) => url.hostname.includes(origin));
-  const isLocal = url.origin === self.location.origin;
+  // ── STRATEGIE A: Cache-First für Core-Assets & CDN-Bibliotheken ──────────────
+  // Garantiert, dass schwergewichtige CDNs (wie Tailwind) ohne Netz-Verzögerung sofort laden
+  const isStaticAsset = ASSETS_TO_CACHE.some(asset => {
+    // Normalisiere Pfade für den Abgleich
+    const cleanAsset = asset.replace("./", "");
+    return event.request.url.includes(cleanAsset);
+  });
 
-  if (isCDN) {
-    // ── CDN: Cache-First mit Lazy-Population ──────────────────────────────
-    // Beim ersten Request: Netzwerk → Cache schreiben.
-    // Danach: aus Cache servieren (kein Netz nötig).
+  if (isStaticAsset) {
     event.respondWith(
-      caches.match(event.request).then((cached) => {
-        if (cached) return cached;
-        return fetch(event.request).then((response) => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return response;
-        });
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        // Fallback aufs Netzwerk, falls ein statisches Asset noch nicht im Cache war
+        return fetch(event.request);
       })
     );
     return;
   }
 
-  if (isLocal) {
-    // ── Lokal: Network-First mit Cache-Fallback ────────────────────────────
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          if (response && response.status === 200 && event.request.method === "GET") {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+  // ── STRATEGIE B: Network-First mit Cache-Fallback ───────────────────────────
+  // Deine bevorzugte Strategie für alle übrigen, dynamischen App-Inhalte
+  event.respondWith(
+    fetch(event.request)
+      .then((response) => {
+        // Wenn die Netzwerk-Antwort OK ist, eine Kopie für Offline-Zwecke in den Cache legen
+        if (response && response.status === 200 && event.request.method === "GET" && url.origin === self.location.origin) {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+        }
+        return response;
+      })
+      .catch(() => {
+        // Wenn das Netzwerk fehlschlägt (Offline-Modus), nimm die Version aus dem Cache
+        return caches.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
           }
-          return response;
-        })
-        .catch(() =>
-          caches.match(event.request).then((cached) => {
-            if (cached) return cached;
-            if (event.request.mode === "navigate") {
-              return caches.match("./index.html");
-            }
-          })
-        )
-    );
-  }
+          
+          // Zusätzlicher Schutz: Wenn eine ganze Seite aufgerufen wird (Navigation) und offline ist
+          if (event.request.mode === "navigate") {
+            return caches.match("./index.html") || caches.match("/");
+          }
+        });
+      })
+  );
 });
