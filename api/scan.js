@@ -21,6 +21,25 @@ const FREE_TRIAL_TTL_SEC      = 86400; // 24 Stunden – IP-Zähler resettet sic
 const POLICY_COOLDOWN_SEC     = 900;   // 15 Minuten Cooldown statt permanenter Ban
 const INVALID_KEY_CACHE_SEC   = 600;   // 10 Minuten Negative-Cache für ungültige Lemon-Squeezy-Keys
 
+// ── i18n-Texte für Content-Policy-Fehler ──────────────────────────────────
+// Beide Sprachen werden in der Response mitgeliefert, damit das Frontend
+// ohne eigenes i18n-Setup die passende Sprache direkt rendern kann.
+// TypeScript-Interface (zur Dokumentation):
+//
+//   interface ContentPolicyError {
+//     error:    string;               // maschinenlesbarer Fehlerstring (legacy-compat)
+//     code:     'CONTENT_POLICY_VIOLATION';
+//     cooldown: true;
+//     ui_message: {
+//       de: string;
+//       en: string;
+//     };
+//   }
+const CONTENT_POLICY_MESSAGES = {
+  de: 'Dieser Inhalt verstößt gegen unsere Sicherheitsrichtlinien. Bitte verwende ein anderes Bild.',
+  en: 'This content violates our safety policy. Please use a different image.',
+};
+
 // ── System-Prompt für OpenAI ───────────────────────────────────────────────
 const SYSTEM_PROMPT = `Du bist ein präziser Daten-Extraktor und didaktischer Lern-Assistent für Studenten (insbesondere Medizin, Jura und MINT).
 Analysiere das hochgeladene Bild. Dies kann eine Tabelle, eine Liste, ein Vorlesungsskript, ein Fließtext oder ein Buchauszug sein.
@@ -534,9 +553,16 @@ export default async function handler(req, res) {
 
         console.warn(`[SECURITY] Content-Policy-Verletzung – 15-Min-Cooldown gesetzt (Hash: ${hashedId.slice(0, 8)}...)`);
 
-        return res.status(400).json({
-          error:    'Dieses Bild konnte nicht verarbeitet werden. Bitte versuche es mit einem anderen Bild.',
-          cooldown: true,
+        // Erweitertes Fehler-Objekt:
+        //   • code        – maschinenlesbar für programmatische Frontend-Logik
+        //   • ui_message  – direkt in Banner-State setzbar, kein i18n-Mapping nötig
+        //   • cooldown    – Signal für den Retry-Timer im Frontend
+        //   • error       – Legacy-Feld (bleibt für Abwärtskompatibilität)
+        return res.status(403).json({
+          error:      'CONTENT_POLICY_VIOLATION',
+          code:       'CONTENT_POLICY_VIOLATION',
+          cooldown:   true,
+          ui_message: CONTENT_POLICY_MESSAGES,
         });
       }
 
