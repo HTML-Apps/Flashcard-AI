@@ -62,25 +62,18 @@ Format: { "flashcards": [{"front": "Begriff oder Frage", "back": "Erklärung ode
 //   SHA-256(salt || input) ist anfällig für Length-Extension-Angriffe.
 //   HMAC ist dafür konstruktionsseitig immun.
 //
-// Fallback-Verhalten ohne HASH_SALT:
-//   Der Server startet nicht blind – stattdessen wird ein Fehler
-//   geloggt und ein deterministischer Fallback-Salt aus dem
-//   UPSTASH_REDIS_REST_TOKEN (der ohnehin ein Geheimnis ist) abgeleitet.
-//   Das verhindert einen Produktionsausfall bei fehlender Env-Variable,
-//   ohne die Sicherheit komplett aufzugeben.
-//   → Besser: HASH_SALT explizit in Vercel setzen (32+ zufällige Zeichen).
+// PRODUCTION: HASH_SALT MUSS als Umgebungsvariable gesetzt sein.
+//   Fehlt die Variable, wirft der Server einen harten Fehler –
+//   ein lautloses Downgrade auf einen unsicheren Fallback ist
+//   in Produktion inakzeptabel (DSGVO Art. 32).
+//   → HASH_SALT in Vercel setzen (mind. 32 zufällige Zeichen).
 // ══════════════════════════════════════════════════════════════════
 function getHashSalt() {
   const salt = process.env.HASH_SALT;
-  if (salt) return salt;
-  // Fallback: ersten 32 Zeichen des Redis-Tokens als Notfall-Salt.
-  // Geloggt als WARNING damit die fehlende Variable sofort auffällt.
-  console.warn(
-    '[SECURITY] HASH_SALT Umgebungsvariable fehlt! ' +
-    'Bitte in Vercel setzen (mind. 32 zufällige Zeichen). ' +
-    'Verwende Fallback-Salt aus UPSTASH_REDIS_REST_TOKEN.'
-  );
-  return (process.env.UPSTASH_REDIS_REST_TOKEN || 'fallback-insecure-salt').slice(0, 32);
+  if (!salt) {
+    throw new Error('Missing HASH_SALT config');
+  }
+  return salt;
 }
 
 function hashKey(input) {
@@ -412,6 +405,23 @@ export default async function handler(req, res) {
     //    Negative Caching ist jetzt in validateLemonSqueezy() integriert.
     // ════════════════════════════════════════════════════════════════
     if (isPaidLicense) {
+      // ── Rate-Limiting: max. 5 Scans/Minute pro Lizenzschlüssel ────
+      // Verhindert, dass ein einzelner Paid-Key durch Skript-Flooding
+      // das globale OpenAI-Rate-Limit für alle Nutzer auslöst.
+      // Verwendet denselben atomaren INCR+EXPIRE(NX)-Pipeline-Mechanismus
+      // wie das Free-Trial-Throttling (keine Race-Conditions möglich).
+      const rateLimitKey   = `rate:license:${licenseKey}`;
+      const rateLimitCount = await redisIncrWithTTL(rateLimitKey, 60);
+      console.log(`[RATE LIMIT] Lizenz-Scans diese Minute: ${rateLimitCount}/5`);
+      if (rateLimitCount > 5) {
+        return res.status(429).json({
+          error: 'Zu viele Anfragen. Bitte warte eine Minute und versuche es erneut.',
+          retryAfter: 60,
+        });
+      }
+    }
+
+    if (isPaidLicense) {
       if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
         return res.status(500).json({ error: 'Datenbank-Konfigurationsfehler.' });
       }
@@ -453,31 +463,53 @@ export default async function handler(req, res) {
     // ── OpenAI Vision aufrufen ─────────────────────────────────────
     console.log('[OPENAI] Sende Bild...');
 
-    const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization:  `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model:           'gpt-4o-mini',
-        max_tokens:      2048,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: [
-              {
-                type:      'image_url',
-                image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: 'high' },
-              },
-              { type: 'text', text: 'Extrahiere die wichtigsten Konzepte oder Vokabelpaare aus diesem Bild und antworte im geforderten JSON-Format.' },
-            ],
-          },
-        ],
-      }),
-    });
+    // AbortController: internes Timeout von 8,5 s.
+    // Vercel Hobby-Tier bricht Serverless-Funktionen nach 10 s hart ab –
+    // wir fangen einen Hänger bei OpenAI kontrolliert ab und senden dem
+    // Client eine saubere JSON-Antwort statt eines hässlichen 504/FUNCTION_INVOCATION_TIMEOUT.
+    const abortController = new AbortController();
+    const openAITimeout   = setTimeout(() => abortController.abort(), 8500);
+
+    let openAIResponse;
+    try {
+      openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:  `Bearer ${apiKey}`,
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          model:           'gpt-4o-mini',
+          max_tokens:      2048,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            {
+              role: 'user',
+              content: [
+                {
+                  type:      'image_url',
+                  image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: 'high' },
+                },
+                { type: 'text', text: 'Extrahiere die wichtigsten Konzepte oder Vokabelpaare aus diesem Bild und antworte im geforderten JSON-Format.' },
+              ],
+            },
+          ],
+        }),
+      });
+    } catch (fetchErr) {
+      if (fetchErr.name === 'AbortError') {
+        console.warn('[OPENAI TIMEOUT] Request nach 8,5 s abgebrochen.');
+        return res.status(504).json({
+          error: 'Die KI antwortet aktuell zu langsam, bitte versuche es noch einmal.',
+          timeout: true,
+        });
+      }
+      throw fetchErr; // unerwarteter Netzwerkfehler → outer catch
+    } finally {
+      clearTimeout(openAITimeout);
+    }
 
     // ════════════════════════════════════════════════════════════════
     // SECURITY: OpenAI Content-Policy-Fehler → temporärer Cooldown
