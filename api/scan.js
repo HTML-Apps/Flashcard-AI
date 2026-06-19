@@ -62,31 +62,6 @@ Rückgabe-Parameter:
 Gib das Ergebnis AUSSCHLIESSLICH als gültiges JSON-Objekt zurück, das ein Array namens "flashcards" enthält. Achte darauf, Anführungszeichen im Text korrekt zu escapen.
 Format: { "flashcards": [{"front": "Begriff oder Frage", "back": "Erklärung oder Antwort"}] }`;
 
-// ══════════════════════════════════════════════════════════════════
-// SECURITY: Gesaltetes HMAC-SHA256-Hashing (server-seitig, Node.js crypto)
-//
-// Problem mit ungesaltetem SHA-256 bei IPv4-Adressen:
-//   IPv4 hat nur ~4,3 Milliarden mögliche Werte. Ein Angreifer kann
-//   alle möglichen IPs vorab hashen (Rainbow Table) und dann aus einem
-//   erbeuteten Redis-Dump die Original-IPs rückwärts ermitteln –
-//   was einem De-Anonymisierungsangriff entspricht und DSGVO Art. 32
-//   widerspricht (keine ausreichende Pseudonymisierung).
-//
-// Lösung – HMAC-SHA256 mit serverseitigem Salt:
-//   HMAC(key=HASH_SALT, data=input) ist kryptografisch an den Salt
-//   gebunden. Ohne Kenntnis des Salts ist eine Rainbow-Table nutzlos,
-//   selbst bei vollständigem Datenbank-Dump.
-//
-//   Verwendung von HMAC statt SHA-256(salt+input):
-//   SHA-256(salt || input) ist anfällig für Length-Extension-Angriffe.
-//   HMAC ist dafür konstruktionsseitig immun.
-//
-// PRODUCTION: HASH_SALT MUSS als Umgebungsvariable gesetzt sein.
-//   Fehlt die Variable, wirft der Server einen harten Fehler –
-//   ein lautloses Downgrade auf einen unsicheren Fallback ist
-//   in Produktion inakzeptabel (DSGVO Art. 32).
-//   → HASH_SALT in Vercel setzen (mind. 32 zufällige Zeichen).
-// ══════════════════════════════════════════════════════════════════
 function getHashSalt() {
   const salt = process.env.HASH_SALT;
   if (!salt) {
