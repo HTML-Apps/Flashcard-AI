@@ -51,20 +51,24 @@ SCHRITT 1: LAYOUT-KLASSIFIZIERUNG
 SCHRITT 2: STRATEGIE-ANWENDUNG
 
 WENN Vokabel/Tabelle: 
-Extrahiere JEDES EINZELNE Paar. Lasse keine Daten aus. Vollständigkeit ist oberstes Gebot. 
-WENN die Liste sehr lang ist, arbeite sie in der Reihenfolge von oben nach unten ab. 
-Es ist wichtig, KEINE Einträge auszulassen. Wenn du merkst, dass du am Ende der Liste noch nicht alle Einträge hast, bleibe strikt bei der Extraktion, bis die Liste vollständig ist.
-Format: Begriff (front) -> Übersetzung/Erklärung (back).
+Extrahiere JEDES EINZELNE Paar. Vollständigkeit ist das oberste Gebot. 
+- ARBEITSPRINZIP: Durchlaufe das Bild strikt von Oben nach Unten.
+- KEINE AUSLASSUNGEN: Es ist ein fataler Fehler, Inhalte auszulassen oder abzukürzen, um Platz zu sparen.
+- KOMPAKTHEIT: Falls die Liste sehr lang ist, kürze nur die Länge der Erklärungen, niemals die Anzahl der Einträge.
+Format: {"front": "Begriff", "back": "Übersetzung/Erklärung"}
 
 WENN Skript/Fließtext: 
-Synthetisiere die Kerninformationen. Brich komplexe Themen in logische, didaktisch wertvolle Frage-Antwort-Paare (front: Frage/Begriff, back: präzise Definition/Antwort) auf. 
-Vermeide Füllsätze, konzentriere dich auf die akademische Tiefe.
+Synthetisiere die Kerninformationen. 
+- ARBEITSPRINZIP: Brich komplexe Themen in logische, didaktisch wertvolle Frage-Antwort-Paare auf.
+- FOKUS: Vermeide Füllsätze, konzentriere dich auf die akademische Tiefe und Präzision.
+Format: {"front": "Frage/Begriff", "back": "Definition/Antwort"}
 
 ALLGEMEINE REGELN:
 - Ignoriere dekorative Elemente, Seitenzahlen, Icons, Trennlinien.
 - Behandle mehrzeilige Begriffe als ein zusammenhängendes Paar.
-- Rückgabe AUSSCHLIESSLICH als JSON-Objekt { "flashcards": [{"front": "...", "back": "..."}] }.
-- Escape Anführungszeichen innerhalb der Texte korrekt.`;
+- Rückgabe AUSSCHLIESSLICH als gültiges JSON-Objekt { "flashcards": [...] }.
+- Escape Anführungszeichen innerhalb der Texte korrekt.
+- Sollte die Antwort aus Platzgründen abbrechen, setze den Fokus strikt auf die Extraktion aller existierenden Datenelemente.`;
 
 function getHashSalt() {
   const salt = process.env.HASH_SALT;
