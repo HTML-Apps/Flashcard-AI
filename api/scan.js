@@ -52,6 +52,8 @@ SCHRITT 2: STRATEGIE-ANWENDUNG
 
 WENN Vokabel/Tabelle: 
 Extrahiere JEDES EINZELNE Paar. Lasse keine Daten aus. Vollständigkeit ist oberstes Gebot. 
+WENN die Liste sehr lang ist, arbeite sie in der Reihenfolge von oben nach unten ab. 
+Es ist wichtig, KEINE Einträge auszulassen. Wenn du merkst, dass du am Ende der Liste noch nicht alle Einträge hast, bleibe strikt bei der Extraktion, bis die Liste vollständig ist.
 Format: Begriff (front) -> Übersetzung/Erklärung (back).
 
 WENN Skript/Fließtext: 
@@ -541,7 +543,7 @@ export default async function handler(req, res) {
     // ── OpenAI Vision aufrufen ─────────────────────────────────────
     console.log('[OPENAI] Sende Bild...');
 
-    // AbortController: internes Timeout von 8,5 s.
+    // AbortController: internes Timeout von 30 s.
     // Vercel Hobby-Tier bricht Serverless-Funktionen nach 10 s hart ab –
     // wir fangen einen Hänger bei OpenAI kontrolliert ab und senden dem
     // Client eine saubere JSON-Antwort statt eines hässlichen 504/FUNCTION_INVOCATION_TIMEOUT.
