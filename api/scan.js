@@ -546,7 +546,7 @@ export default async function handler(req, res) {
     // wir fangen einen Hänger bei OpenAI kontrolliert ab und senden dem
     // Client eine saubere JSON-Antwort statt eines hässlichen 504/FUNCTION_INVOCATION_TIMEOUT.
     const abortController = new AbortController();
-    const openAITimeout   = setTimeout(() => abortController.abort(), 8500);
+    const openAITimeout   = setTimeout(() => abortController.abort(), 30000);
 
     let openAIResponse;
     try {
