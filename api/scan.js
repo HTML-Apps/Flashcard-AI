@@ -568,7 +568,7 @@ export default async function handler(req, res) {
               content: [
                 {
                   type:      'image_url',
-                  image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: 'low' },
+                  image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: 'high' },
                 },
                 { type: 'text', text: 'Extrahiere die wichtigsten Konzepte oder Vokabelpaare aus diesem Bild und antworte im geforderten JSON-Format.' },
               ],
