@@ -208,6 +208,37 @@ async function kvDecr(key) {
   return json.result;
 }
 
+async function kvIncr(key) {
+  const res = await fetch(`${KV_URL()}/incr/${key}`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN()}` },
+  });
+  if (!res.ok) throw new Error(`KV INCR failed: ${res.status}`);
+  const json = await res.json();
+  return json.result;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// REFUND: Gutschrift bei fehlgeschlagenem OpenAI-Call
+//
+// Wird aufgerufen wenn der Credit bereits VOR dem OpenAI-Call abgezogen
+// wurde (Pre-Deduction, siehe Haupt-Handler) und der Call danach
+// fehlschlägt (Timeout, Netzwerkfehler, Content-Policy, OpenAI-Fehler,
+// ungültiges JSON). Verhindert, dass Paying-User Credits für Scans
+// verlieren, die nie erfolgreich verarbeitet wurden.
+//
+// Nur für Paid-Licenses relevant – Free-Trial nutzt kein Decr/Incr-Konto.
+// ══════════════════════════════════════════════════════════════════
+async function refundIfPaidLicense(isPaidLicense, licenseKey) {
+  if (!isPaidLicense) return;
+  try {
+    const restored = await kvIncr(`license:${licenseKey}`);
+    console.log(`[REFUND] Credit zurückerstattet. Neuer Stand: ${restored}`);
+  } catch (err) {
+    // Ein fehlgeschlagener Refund darf den Error-Response-Pfad nicht blockieren.
+    console.error('[REFUND] Fehlgeschlagen:', err);
+  }
+}
+
 // ── IP-Adresse: Vercel-native Header, resistent gegen X-Forwarded-For-Spoofing
 function getClientIp(req) {
   const realIp = req.headers['x-real-ip'];
@@ -393,6 +424,7 @@ export default async function handler(req, res) {
 
   let usageCurrent   = null;
   let remainingScans = null;
+  let creditDeducted = false; // true sobald Pre-Deduction stattgefunden hat (für Refund/Outer-Catch)
 
   try {
 
@@ -421,6 +453,15 @@ export default async function handler(req, res) {
       }
       usageCurrent = count;
     }
+
+    // ── Bild aus Request-Body holen (VOR jeder Pre-Deduction!) ─────
+    // Muss vor dem Credit-Abzug passieren, damit ungültige Requests
+    // (kein Bild übermittelt) keine Credits kosten.
+    const { image } = req.body || {};
+    if (!image || typeof image !== 'string') {
+      return res.status(400).json({ error: 'Kein Bild übermittelt.' });
+    }
+    const base64Data = image.includes(',') ? image.split(',')[1] : image;
 
     // ════════════════════════════════════════════════════════════════
     // B) PAID LICENSE – Lemon Squeezy + KV Scan-Konto
@@ -473,14 +514,27 @@ export default async function handler(req, res) {
         console.warn('[BLOCKIERT] Keine Scans mehr verfügbar.');
         return res.status(402).json({ error: 'Deine Scans sind aufgebraucht.' });
       }
-    }
 
-    // ── Bild aus Request-Body holen ────────────────────────────────
-    const { image } = req.body || {};
-    if (!image || typeof image !== 'string') {
-      return res.status(400).json({ error: 'Kein Bild übermittelt.' });
+      // ════════════════════════════════════════════════════════════
+      // SECURITY: Pre-Deduction (Race-Condition-Fix)
+      //
+      // Vorher wurde der Credit erst NACH einem erfolgreichen OpenAI-
+      // Call abgezogen (kvDecr ganz am Ende). Problem: Zwischen dem
+      // scansLeft-Check oben und dem späten kvDecr konnten mehrere
+      // parallele Requests denselben "letzten" Credit durchwinken,
+      // bevor einer von ihnen den Zähler tatsächlich verringert hat
+      // → mehr OpenAI-Calls als bezahlte Credits.
+      //
+      // Fix: Credit wird HIER, sofort nach dem Check und VOR dem
+      // teuren OpenAI-Call, atomar via KV DECR abgezogen. Schlägt der
+      // OpenAI-Call danach fehl (Timeout/Error/Content-Policy/Parse-
+      // Fehler), wird der Credit über refundIfPaidLicense() sofort
+      // wieder gutgeschrieben.
+      // ════════════════════════════════════════════════════════════
+      remainingScans  = await kvDecr(`license:${licenseKey}`);
+      creditDeducted  = true;
+      console.log(`[KV DECR - PRE] Credit vorab abgezogen. Verbleibend: ${remainingScans}`);
     }
-    const base64Data = image.includes(',') ? image.split(',')[1] : image;
 
     // ── OpenAI Vision aufrufen ─────────────────────────────────────
     console.log('[OPENAI] Sende Bild...');
@@ -512,7 +566,7 @@ export default async function handler(req, res) {
               content: [
                 {
                   type:      'image_url',
-                  image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: 'high' },
+                  image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: 'low' },
                 },
                 { type: 'text', text: 'Extrahiere die wichtigsten Konzepte oder Vokabelpaare aus diesem Bild und antworte im geforderten JSON-Format.' },
               ],
@@ -523,12 +577,16 @@ export default async function handler(req, res) {
     } catch (fetchErr) {
       if (fetchErr.name === 'AbortError') {
         console.warn('[OPENAI TIMEOUT] Request nach 8,5 s abgebrochen.');
+        await refundIfPaidLicense(isPaidLicense, licenseKey);
+        creditDeducted = false;
         return res.status(504).json({
           error: 'Die KI antwortet aktuell zu langsam, bitte versuche es noch einmal.',
           timeout: true,
         });
       }
-      throw fetchErr; // unerwarteter Netzwerkfehler → outer catch
+      await refundIfPaidLicense(isPaidLicense, licenseKey);
+      creditDeducted = false; // bereits zurückerstattet → Outer-Catch darf nicht erneut gutschreiben
+      throw fetchErr; // unerwarteter Netzwerkfehler → outer catch (KEIN doppelter Refund)
     } finally {
       clearTimeout(openAITimeout);
     }
@@ -556,6 +614,9 @@ export default async function handler(req, res) {
 
         console.warn(`[SECURITY] Content-Policy-Verletzung – 15-Min-Cooldown gesetzt (Hash: ${hashedId.slice(0, 8)}...)`);
 
+        await refundIfPaidLicense(isPaidLicense, licenseKey);
+        creditDeducted = false;
+
         // Erweitertes Fehler-Objekt:
         //   • code        – maschinenlesbar für programmatische Frontend-Logik
         //   • ui_message  – direkt in Banner-State setzbar, kein i18n-Mapping nötig
@@ -569,6 +630,8 @@ export default async function handler(req, res) {
         });
       }
 
+      await refundIfPaidLicense(isPaidLicense, licenseKey);
+      creditDeducted = false;
       return res.status(502).json({ error: `OpenAI API Fehler: ${openAIResponse.status}` });
     }
 
@@ -585,14 +648,14 @@ export default async function handler(req, res) {
       }
     } catch (parseError) {
       console.error('[PARSE ERROR]', parseError, 'Raw Content:', rawContent);
+      await refundIfPaidLicense(isPaidLicense, licenseKey);
+      creditDeducted = false;
       return res.status(422).json({ error: 'Ungültiges JSON vom AI-Modell.' });
     }
 
-    // ── Scan abziehen (nur bei echten Lizenz-Keys) ─────────────────
-    if (isPaidLicense) {
-      remainingScans = await kvDecr(`license:${licenseKey}`);
-      console.log(`[KV DECR] Verbleibende Scans: ${remainingScans}`);
-    }
+    // ── Scan wurde bereits VOR dem OpenAI-Call abgezogen (Pre-Deduction) ───
+    // Kein erneuter kvDecr hier nötig – remainingScans wurde bereits oben
+    // beim Pre-Deduction-Schritt gesetzt.
 
     // ── Erfolg-Response ────────────────────────────────────────────
     console.log('[API SUCCESS]');
@@ -610,6 +673,12 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error('[FATAL ERROR]', err);
+    // Falls der Credit bereits per Pre-Deduction abgezogen wurde und der
+    // Fehler nicht über einen der spezifischen Fehlerpfade oben behandelt
+    // (und dort schon refunded) wurde, hier nachträglich gutschreiben.
+    if (creditDeducted) {
+      await refundIfPaidLicense(isPaidLicense, licenseKey);
+    }
     return res.status(500).json({ error: 'Interner Serverfehler.' });
   }
 }
