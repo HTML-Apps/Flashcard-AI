@@ -289,11 +289,39 @@ async function validateTurnstileToken(token, ip) {
 // ── Haupt-Handler ──────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', 'https://focus-flashcards.app');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST')   return res.status(405).json({ error: 'Method Not Allowed' });
+
+  // ════════════════════════════════════════════════════════════════
+  // SECURITY: Globales IP-Rate-Limiting (vor allen anderen Checks)
+  //
+  // Schützt den gesamten Endpoint – unabhängig von Free-Trial/Paid/
+  // Master-Key – vor Flooding/DoS durch eine einzelne IP. Nutzt denselben
+  // atomaren INCR+EXPIRE(NX)-Pipeline-Mechanismus wie das restliche
+  // Rate-Limiting (keine Race-Conditions möglich).
+  // Max. 20 Requests/Minute pro IP.
+  // ════════════════════════════════════════════════════════════════
+  try {
+    const globalIp        = getClientIp(req);
+    const globalRateKey   = `rate:global_ip:${hashKey(globalIp)}`;
+    const globalRateCount = await redisIncrWithTTL(globalRateKey, 60);
+
+    console.log(`[GLOBAL RATE LIMIT] ${globalRateCount}/20 für IP-Hash`);
+
+    if (globalRateCount > 20) {
+      return res.status(429).json({
+        error: 'Zu viele Anfragen. Bitte warte eine Minute und versuche es erneut.',
+        retryAfter: 60,
+      });
+    }
+  } catch (err) {
+    // Fail-open: Wenn Redis nicht erreichbar ist, darf das globale
+    // Rate-Limiting den gesamten Service nicht blockieren.
+    console.error('[GLOBAL RATE LIMIT] Fehlgeschlagen, fahre fort:', err);
+  }
 
   // OpenAI-Key prüfen
   const apiKey = process.env.OPENAI_API_KEY;
