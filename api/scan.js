@@ -559,7 +559,7 @@ export default async function handler(req, res) {
         signal: abortController.signal,
         body: JSON.stringify({
           model:           'gpt-4o-mini',
-          max_tokens:      2048,
+          max_tokens:      4096,
           response_format: { type: 'json_object' },
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
