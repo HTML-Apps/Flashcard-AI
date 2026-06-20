@@ -548,7 +548,7 @@ export default async function handler(req, res) {
     // wir fangen einen Hänger bei OpenAI kontrolliert ab und senden dem
     // Client eine saubere JSON-Antwort statt eines hässlichen 504/FUNCTION_INVOCATION_TIMEOUT.
     const abortController = new AbortController();
-    const openAITimeout   = setTimeout(() => abortController.abort(), 30000);
+    const openAITimeout   = setTimeout(() => abortController.abort(), 300000);
 
     let openAIResponse;
     try {
@@ -561,7 +561,7 @@ export default async function handler(req, res) {
         signal: abortController.signal,
         body: JSON.stringify({
           model:           'gpt-4o-mini',
-          max_tokens:      8192,
+          max_tokens:      81920,
           response_format: { type: 'json_object' },
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
@@ -580,7 +580,7 @@ export default async function handler(req, res) {
       });
     } catch (fetchErr) {
       if (fetchErr.name === 'AbortError') {
-        console.warn('[OPENAI TIMEOUT] Request nach 8,5 s abgebrochen.');
+        console.warn('[OPENAI TIMEOUT] Request nach 30 s abgebrochen.');
         await refundIfPaidLicense(isPaidLicense, licenseKey);
         creditDeducted = false;
         return res.status(504).json({
