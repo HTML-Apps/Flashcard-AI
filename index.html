@@ -1957,6 +1957,8 @@ You have the right to object at any time to the processing of personal data conc
     let _scanAttempted     = false; // Flag: wird true wenn Nutzer aktiv auf "Scannen" drückt
     let _turnstileReady    = false; // Flag: Cloudflare-Skript vollständig geladen
     let _turnstileRendered = false; // Flag: Widget bereits gerendert (kein Doppel-Render)
+    let _turnstileErrorRetries = 0; // Zähler: verhindert unendliche Auto-Retry-Schleife
+    const TURNSTILE_MAX_AUTO_RETRIES = 3;
 
     // ════════════════════════════════════════════════════════════════
     // onTurnstileLoad – wird vom Cloudflare-Skript via ?onload= aufgerufen
@@ -1983,6 +1985,7 @@ You have the right to object at any time to the processing of personal data conc
 
     function onTurnstileSuccess(token) {
         _turnstileToken = token;
+        _turnstileErrorRetries = 0; // Erfolgreich gelöst → Fehlerzähler zurücksetzen
         // Scan-Button aktivieren sobald Token vorliegt und Bild gewählt
         const scanBtn = document.getElementById('scan-btn');
         if (scanBtn && window._scanImageBase64) {
@@ -2037,33 +2040,55 @@ You have the right to object at any time to the processing of personal data conc
         // sichtbar war (Nutzer sieht das Widget und erwartet dass es funktioniert)
         const wrapper = document.getElementById('turnstile-wrapper');
         const widgetVisible = wrapper && !wrapper.classList.contains('hidden');
+
+        // BUGFIX Endlos-Retry:
+        //   Ohne Obergrenze konnte sich bei dauerhaften Problemen (z.B. Netzwerk,
+        //   Hosting-/CSP-Fehlkonfiguration) alle 2s ein neuer Render-Versuch
+        //   aufbauen, der wieder scheitert → erneute Endlosschleife, nur mit
+        //   2s-Abstand statt sofort. Nach TURNSTILE_MAX_AUTO_RETRIES wird
+        //   abgebrochen und der Nutzer um manuellen Reload gebeten.
+        _turnstileErrorRetries++;
+        const retriesExhausted = _turnstileErrorRetries > TURNSTILE_MAX_AUTO_RETRIES;
+
         if (_scanAttempted || widgetVisible) {
             setScanError(
-                currentLang === 'de'
-                    ? 'Sicherheitsprüfung wird neu geladen, bitte einen Moment warten …'
-                    : 'Security check is reloading, please wait a moment …'
+                retriesExhausted
+                    ? (currentLang === 'de'
+                        ? 'Sicherheitsprüfung fehlgeschlagen. Bitte lade die Seite neu.'
+                        : 'Security check failed. Please reload the page.')
+                    : (currentLang === 'de'
+                        ? 'Sicherheitsprüfung wird neu geladen, bitte einen Moment warten …'
+                        : 'Security check is reloading, please wait a moment …')
             );
         }
 
-        // Container leeren, damit ein evtl. hängendes/halbtotes iframe nicht
-        // im Weg steht, falls später erneut gerendert wird.
-        const widgetEl = document.getElementById('turnstile-widget');
-        if (widgetEl) {
-            widgetEl.innerHTML = '';
+        // BUGFIX postMessage-Origin-Fehler:
+        //   widgetEl.innerHTML = '' riss das iframe manuell aus dem DOM, ohne dass
+        //   Cloudflare das mitbekam. Cloudflares internes Polling hielt weiterhin
+        //   eine Referenz auf das jetzt verwaiste Widget-Fenster und versuchte
+        //   per postMessage dorthin zu senden → "target origin does not match
+        //   recipient window's origin" + "Cannot find Widget cf-chl-widget-xxxxx".
+        //   Fix: korrekte Cloudflare-API turnstile.remove() nutzen, die das Widget
+        //   auch intern bei Cloudflare sauber deregistriert.
+        if (window.turnstile) {
+            try { window.turnstile.remove('#turnstile-widget'); } catch (_) {}
         }
 
         // Automatischer Recovery-Versuch nach kurzer Verzögerung (statt erst
         // beim nächsten View-Wechsel): verhindert, dass Free-Tier-Nutzer nach
         // einem 300030-Fehler die Seite manuell neu laden müssen. Verzögerung
         // vermeidet ein zu schnelles Re-Render in dasselbe Fehlerfenster hinein.
-        setTimeout(() => {
-            if (!_turnstileRendered && wrapper && !wrapper.classList.contains('hidden')) {
-                _renderTurnstileWidget();
-                if (scanBtn) {
-                    scanBtn.disabled = !_turnstileToken;
+        // Bricht ab, sobald TURNSTILE_MAX_AUTO_RETRIES überschritten ist.
+        if (!retriesExhausted) {
+            setTimeout(() => {
+                if (!_turnstileRendered && wrapper && !wrapper.classList.contains('hidden')) {
+                    _renderTurnstileWidget();
+                    if (scanBtn) {
+                        scanBtn.disabled = !_turnstileToken;
+                    }
                 }
-            }
-        }, 2000);
+            }, 2000);
+        }
     }
 
     // ── Internes Render-Helper (verhindert Doppel-Rendering) ──────
