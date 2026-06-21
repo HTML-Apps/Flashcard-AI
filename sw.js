@@ -1,5 +1,5 @@
 // sw.js - Gemergte & optimierte Version für Flashcard-AI
-const CACHE_NAME = "Flashcard-AI_v6"; // Version erhöht: Tailwind CDN auf jsDelivr umgestellt
+const CACHE_NAME = "Flashcard-AI_v7"; // Version erhöht: Tailwind CDN auf jsDelivr umgestellt
 
 // Assets, die für den vollständigen Offline-Betrieb zwingend benötigt werden
 const ASSETS_TO_CACHE = [
@@ -63,7 +63,8 @@ self.addEventListener("fetch", (event) => {
   if (
     event.request.url.includes("firestore") || 
     event.request.url.includes("googleapis") || 
-    event.request.url.includes("/api/")
+    event.request.url.includes("/api/") ||
+    event.request.url.includes("challenges.cloudflare.com")
   ) {
     return;
   }
