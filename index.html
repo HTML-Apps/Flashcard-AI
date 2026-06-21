@@ -340,6 +340,7 @@
         }
         #install-banner-close:hover { color: var(--color-primary); }
     </style>
+    <script src="https://app.lemonsqueezy.com/js/lemon.js" defer></script>
 </head>
 
 <body class="bg-surface text-base transition-colors duration-300 h-screen w-screen overflow-hidden flex flex-col font-sans relative">
@@ -654,8 +655,8 @@
                 </div>
                 <p class="text-xs text-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span data-i18n="settings_license_hint"></span>
-                    <a href="https://byteengineered.lemonsqueezy.com/checkout/buy/87f24105-e8b0-4763-bf9f-da9ae295001b" target="_blank" class="accent-text underline" data-i18n="settings_license_buy"></a>
-                    <a href="https://byteengineered.lemonsqueezy.com/checkout/buy/68298d25-cb1d-4872-a85b-a3cfcac36ade" target="_blank" class="accent-text underline" data-i18n="settings_license_topup"></a>
+                    <a href="https://byteengineered.lemonsqueezy.com/checkout/buy/87f24105-e8b0-4763-bf9f-da9ae295001b" class="lemonsqueezy-button accent-text underline" data-i18n="settings_license_buy"></a>
+                    <a href="https://byteengineered.lemonsqueezy.com/checkout/buy/68298d25-cb1d-4872-a85b-a3cfcac36ade" class="lemonsqueezy-button accent-text underline" data-i18n="settings_license_topup"></a>
                 </p>
             </div>
 
@@ -3048,6 +3049,17 @@ You have the right to object at any time to the processing of personal data conc
         localStorage.setItem('pwa_banner_dismissed', '1');
         hidePwaInstallBanner();
     }
+
+    // ══════════════════════════════════════════════
+    //  Lemon Squeezy Checkout Overlay
+    // ══════════════════════════════════════════════
+    document.addEventListener('DOMContentLoaded', () => {
+        if (typeof window.createLemonSqueezy === 'function') {
+            window.createLemonSqueezy();
+        } else {
+            console.warn('⚠️ [Lemon Squeezy] lemon.js noch nicht geladen.');
+        }
+    });
 
     document.addEventListener('DOMContentLoaded', initApp);
 
