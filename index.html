@@ -381,7 +381,7 @@
     <main class="flex-1 overflow-y-auto hide-scrollbar relative z-0" id="main-container">
 
         <!-- ─── View: Onboarding ─── -->
-        <section id="view-onboarding" class="absolute inset-0 flex flex-col justify-center items-center p-8 bg-surface z-50 hidden">
+        <section id="view-onboarding" class="absolute inset-0 flex flex-col items-center p-8 bg-surface z-50 hidden overflow-y-auto">
             <div class="absolute top-4 right-5 flex gap-3 items-center">
                 <div class="flex gap-2 items-center">
                     <button class="accent-dot" data-accent="indigo" style="background:#6366f1" onclick="setAccent('indigo')" title="Indigo"></button>
@@ -393,52 +393,54 @@
                 </button>
             </div>
 
-            <div class="w-20 h-20 accent-bg rounded-3xl flex items-center justify-center mb-6 accent-shadow">
-                <i class="fa-solid fa-brain text-white text-4xl"></i>
-            </div>
-
-            <div class="flex gap-3 mb-7 w-full max-w-sm">
-                <button id="lang-btn-de" class="lang-btn lang-de flex-1" onclick="setLanguage('de')">🇩🇪 Deutsch</button>
-                <button id="lang-btn-en" class="lang-btn lang-en flex-1" onclick="setLanguage('en')">🇺🇸 English</button>
-            </div>
-
-            <h2 class="text-3xl font-bold mb-3 text-center whitespace-pre-line" data-i18n="onboarding_title"></h2>
-            <p class="text-sm text-muted text-center mb-8 max-w-xs" data-i18n="onboarding_subtitle"></p>
-
-            <div class="space-y-5 w-full max-w-sm">
-                <div class="flex items-center gap-4">
-                    <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">1</div>
-                    <p class="text-sm" data-i18n="onboarding_step1"></p>
+            <div class="flex flex-col items-center w-full" style="margin: auto;">
+                <div class="w-20 h-20 accent-bg rounded-3xl flex items-center justify-center mb-6 accent-shadow">
+                    <i class="fa-solid fa-brain text-white text-4xl"></i>
                 </div>
-                <div class="flex items-center gap-4">
-                    <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">2</div>
-                    <p class="text-sm" data-i18n="onboarding_step2"></p>
-                </div>
-                <div class="flex items-center gap-4">
-                    <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">3</div>
-                    <p class="text-sm" data-i18n="onboarding_step3"></p>
-                </div>
-                <div class="flex items-center gap-4">
-                    <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">4</div>
-                    <p class="text-sm" data-i18n="onboarding_step4"></p>
-                </div>
-            </div>
 
-            <div class="mt-8 mb-4 w-full max-w-sm">
-                <label id="agb-label" class="flex items-start gap-3 cursor-pointer select-none">
-                    <input type="checkbox" id="agb-checkbox"
-                           class="mt-0.5 w-5 h-5 flex-shrink-0 rounded accent-checkbox cursor-pointer"
-                           style="accent-color: var(--accent);">
-                    <span id="agb-label-text" class="text-sm text-muted leading-snug"></span>
-                </label>
-                <p id="agb-error" class="mt-2 text-xs text-red-500 hidden" data-i18n="onboarding_agb_error"></p>
-            </div>
+                <div class="flex gap-3 mb-7 w-full max-w-sm">
+                    <button id="lang-btn-de" class="lang-btn lang-de flex-1" onclick="setLanguage('de')">🇩🇪 Deutsch</button>
+                    <button id="lang-btn-en" class="lang-btn lang-en flex-1" onclick="setLanguage('en')">🇺🇸 English</button>
+                </div>
 
-            <button onclick="finishOnboarding()" class="mt-4 w-full max-w-sm accent-bg accent-bg-hover text-white py-4 rounded-2xl font-bold accent-shadow transition-colors active:scale-95" data-i18n="onboarding_cta"></button>
+                <h2 class="text-3xl font-bold mb-3 text-center whitespace-pre-line" data-i18n="onboarding_title"></h2>
+                <p class="text-sm text-muted text-center mb-8 max-w-xs" data-i18n="onboarding_subtitle"></p>
+
+                <div class="space-y-5 w-full max-w-sm">
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">1</div>
+                        <p class="text-sm" data-i18n="onboarding_step1"></p>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">2</div>
+                        <p class="text-sm" data-i18n="onboarding_step2"></p>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">3</div>
+                        <p class="text-sm" data-i18n="onboarding_step3"></p>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-full accent-light accent-text flex justify-center items-center font-bold flex-shrink-0">4</div>
+                        <p class="text-sm" data-i18n="onboarding_step4"></p>
+                    </div>
+                </div>
+
+                <div class="mt-8 mb-4 w-full max-w-sm">
+                    <label id="agb-label" class="flex items-start gap-3 cursor-pointer select-none">
+                        <input type="checkbox" id="agb-checkbox"
+                               class="mt-0.5 w-5 h-5 flex-shrink-0 rounded accent-checkbox cursor-pointer"
+                               style="accent-color: var(--accent);">
+                        <span id="agb-label-text" class="text-sm text-muted leading-snug"></span>
+                    </label>
+                    <p id="agb-error" class="mt-2 text-xs text-red-500 hidden" data-i18n="onboarding_agb_error"></p>
+                </div>
+
+                <button onclick="finishOnboarding()" class="mt-4 w-full max-w-sm accent-bg accent-bg-hover text-white py-4 rounded-2xl font-bold accent-shadow transition-colors active:scale-95" data-i18n="onboarding_cta"></button>
+            </div>
         </section>
 
         <!-- ─── View: Scan ─── -->
-        <section id="view-scan"  class="view hidden flex flex-col px-5 pt-4 pb-4 min-h-full" style="max-width: 600px; margin: 0 auto; width: 100%;">
+        <section id="view-scan"  class="view hidden flex flex-col px-5 pt-4 pb-4 overflow-y-auto" style="max-width: 600px; margin: 0 auto; width: 100%;">
             <div id="backup-warning" class="w-full mb-4 bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 rounded-2xl p-3 text-xs flex justify-between items-center hidden">
                 <span><i class="fa-solid fa-triangle-exclamation mr-2"></i><span data-i18n="backup_warning"></span></span>
                 <div class="flex items-center gap-2 flex-shrink-0">
@@ -514,7 +516,7 @@
         </section>
 
         <!-- ─── View: Lernen / Learn ─── -->
-        <section id="view-learn" class="view hidden flex flex-col px-5 pt-3 pb-4 relative" style="height:100%">
+        <section id="view-learn" class="view hidden flex flex-col px-5 pt-3 pb-4 relative overflow-y-auto" style="min-height:100%">
             <!-- Dynamisches Banner für Learn-Modi -->
             <div id="learn-banner" class="absolute top-16 left-1/2 transform -translate-x-1/2 bg-slate-800 dark:bg-white text-white dark:text-black px-4 py-2 rounded-full text-sm font-bold opacity-0 pointer-events-none transition-opacity duration-300 z-50 shadow-lg text-center whitespace-nowrap"></div>
 
@@ -1992,10 +1994,18 @@ You have the right to object at any time to the processing of personal data conc
         if (scanBtn && window._scanImageBase64) {
             scanBtn.disabled = false;
         }
+        // Widget nach erfolgreicher Validierung (grüner Haken) ausblenden.
+        // Wird bei Bedarf (neues Token nötig) über _showTurnstileIfNeeded()
+        // bzw. das Error-/Reset-Handling wieder eingeblendet.
+        const wrapper = document.getElementById('turnstile-wrapper');
+        if (wrapper) wrapper.classList.add('hidden');
     }
 
     function onTurnstileExpired() {
         _turnstileToken = null;
+        // Token abgelaufen → Widget wieder zeigen, damit Nutzer erneut lösen kann
+        const wrapper = document.getElementById('turnstile-wrapper');
+        if (wrapper) wrapper.classList.remove('hidden');
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -2042,12 +2052,16 @@ You have the right to object at any time to the processing of personal data conc
             scanBtn.disabled = true;
         }
 
+        // Bei einem Fehler braucht der Nutzer ein neues Captcha → Widget
+        // (falls zuvor durch onTurnstileSuccess ausgeblendet) wieder zeigen.
+        const wrapper = document.getElementById('turnstile-wrapper');
+        if (wrapper) wrapper.classList.remove('hidden');
+
         // Nur loggen auf debug-Level, kein console.error() → kein Log-Flooding
         console.warn(`[Turnstile] Widget-Fehler (Code: ${errorCode || 'unbekannt'})`);
 
         // Nutzer informieren: nur wenn Scan aktiv versucht wurde ODER Widget bereits
         // sichtbar war (Nutzer sieht das Widget und erwartet dass es funktioniert)
-        const wrapper = document.getElementById('turnstile-wrapper');
         const widgetVisible = wrapper && !wrapper.classList.contains('hidden');
 
         // BUGFIX Endlos-Retry:
@@ -2220,6 +2234,8 @@ You have the right to object at any time to the processing of personal data conc
                 if (response.status === 403 && errData.turnstile) {
                     // Token ist verbraucht/ungültig → zurücksetzen, Widget neu rendern
                     _turnstileToken = null;
+                    const turnstileWrapper = document.getElementById('turnstile-wrapper');
+                    if (turnstileWrapper) turnstileWrapper.classList.remove('hidden');
                     if (window.turnstile) {
                         _resetTurnstileWidget();
                     }
@@ -2275,6 +2291,10 @@ You have the right to object at any time to the processing of personal data conc
             if (window.turnstile) {
                 _resetTurnstileWidget();
             }
+            // Für den nächsten Scan wird ggf. wieder ein Token benötigt (Free-Tier) →
+            // _showTurnstileIfNeeded() entscheidet anhand des Lizenzstatus neu, ob
+            // das Widget sichtbar sein soll.
+            _showTurnstileIfNeeded();
 
             // Scan-Zähler: bevorzugt echten Stand vom Backend übernehmen
             if (data.usage && data.usage.current) {
