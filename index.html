@@ -1708,12 +1708,15 @@ You have the right to object at any time to the processing of personal data conc
                 if (Array.isArray(data) && data.length > 0 && data[0].words !== undefined) {
                     let imported = 0;
                     for (const deck of data) {
-                        // Dynamisch auf front/back konvertieren
+                        // Dynamisch auf front/back konvertieren + XSS-Härtung
+                        // (siehe sanitizeImportedText) BEVOR irgendetwas in
+                        // deck.words landet.
                         deck.words = deck.words.map(w => ({
                             id: w.id || Date.now() + Math.random(),
-                            front: w.front || w.en || '',
-                            back: w.back || w.de || ''
+                            front: sanitizeImportedText(w.front || w.en || ''),
+                            back: sanitizeImportedText(w.back || w.de || '')
                         }));
+                        deck.name = sanitizeImportedText(deck.name || '');
                         const existing = decks.find(d => d.id === deck.id);
                         if (!existing) { await saveDeck(deck); imported += deck.words.length; }
                     }
@@ -1728,8 +1731,8 @@ You have the right to object at any time to the processing of personal data conc
                         .filter(w => (w.front && w.back) || (w.en && w.de))
                         .map(w => ({
                             id: Date.now() + Math.random(),
-                            front: w.front || w.en,
-                            back: w.back || w.de
+                            front: sanitizeImportedText(w.front || w.en),
+                            back: sanitizeImportedText(w.back || w.de)
                         }))
                         .filter(w => !existingWords.has(w.front.toLowerCase()));
                     target.words = [...newWords, ...target.words];
@@ -2926,6 +2929,44 @@ You have the right to object at any time to the processing of personal data conc
 
     function escapeHtml(str) {
         return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ══════════════════════════════════════════════
+    //  XSS-Härtung für importierte Backup-Dateien
+    //
+    //  Hintergrund: Backup-JSON-Dateien können von außerhalb der App
+    //  stammen (z.B. manuell bearbeitet, von einer fremden Quelle).
+    //  deck.words wird an vielen Stellen per Template-Literal direkt in
+    //  innerHTML gerendert (siehe escapeHtml()-Aufrufe beim Anzeigen).
+    //  Diese Funktion ist eine ZUSÄTZLICHE Verteidigungsebene direkt beim
+    //  IMPORT, BEVOR die Daten überhaupt in deck.words landen – nicht erst
+    //  beim Rendern. So bleiben auch Rohdaten in IndexedDB (Export,
+    //  Sync, Debug-Ansichten etc.) frei von rohem HTML/Script-Markup,
+    //  selbst wenn an einer Stelle vergessen würde, escapeHtml() beim
+    //  Rendern aufzurufen.
+    //
+    //  Vorgehen:
+    //   1. Erzwingt einen String (keine Objekte/Arrays als front/back).
+    //   2. Kappt absurd lange Eingaben (Schutz vor Speicher-/UI-Müll).
+    //   3. Entfernt Tags/Markup komplett (statt sie zu Entities zu
+    //      kodieren!). Wichtig: escapeHtml() wird beim RENDERN bereits an
+    //      jeder Anzeigestelle aufgerufen (siehe deck.words.forEach etc.).
+    //      Würde diese Funktion hier zusätzlich Entity-Encoding machen
+    //      (z.B. "&" → "&amp;"), würde das beim Rendern ERNEUT escaped
+    //      werden ("&amp;" → "&amp;amp;") und dem User kaputten Text
+    //      anzeigen. Deshalb: hier nur strippen/validieren, das Encoding
+    //      bleibt zentral beim Rendern.
+    // ══════════════════════════════════════════════
+    function sanitizeImportedText(text) {
+        if (text === null || text === undefined) return '';
+        let str = String(text).slice(0, 2000); // Hard-Cap gegen Speicher-Müll
+        // Komplette Tags entfernen (<script>, <img onerror=...>, etc.)
+        str = str.replace(/<[^>]*>/g, '');
+        // Roh-Anführungszeichen/Spitzklammern, die durch das Tag-Stripping
+        // übrig bleiben könnten, ebenfalls entfernen (defense in depth –
+        // verlässt sich nicht allein auf den Tag-Regex oben).
+        str = str.replace(/[<>]/g, '');
+        return str.trim();
     }
 
 

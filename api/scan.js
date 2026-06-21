@@ -8,6 +8,24 @@
 //   KV_REST_API_TOKEN        – Upstash KV token (für Lizenz-Keys)
 //   SECRET_MASTER_KEY        – Dein eigener Test-Key (unbegrenzte Scans)
 //   TURNSTILE_SECRET_KEY     – Cloudflare Turnstile Secret Key (Bot-Schutz für Free-Tier)
+//   LEMONSQUEEZY_API_KEY     – LS "API Key" (Settings → API), NICHT der License-Key!
+//                              Wird nur für die authentifizierte REST-API
+//                              (GET /v1/license-keys/{id}) benötigt, NICHT für
+//                              /v1/licenses/validate oder /v1/licenses/activate.
+//
+// WICHTIGER HINWEIS zu Lemon Squeezy Endpoints (es gibt ZWEI getrennte APIs!):
+//   1) "License API"  (kein Auth-Header, license_key im Body):
+//        POST https://api.lemonsqueezy.com/v1/licenses/validate
+//        POST https://api.lemonsqueezy.com/v1/licenses/activate
+//        POST https://api.lemonsqueezy.com/v1/licenses/deactivate
+//      → Diese setzen den Status im LS-Dashboard von "Inactive" auf "Active".
+//        Es gibt KEINEN Endpoint "/v1/license-keys/activate" – der Pfad lautet
+//        "/v1/licenses/activate" (Plural "licenses", nicht "license-keys").
+//   2) "Authenticated REST API" (Bearer-Token = LEMONSQUEEZY_API_KEY):
+//        GET https://api.lemonsqueezy.com/v1/license-keys/{id}
+//      → Liefert Detail-Felder wie activation_limit, status, etc. Braucht die
+//        numerische License-Key-ID (kommt aus der validate/activate-Response
+//        als data.license_key.id), NICHT den License-Key-String selbst.
 
 import crypto from 'crypto';
 
@@ -225,6 +243,16 @@ async function kvIncr(key) {
   return json.result;
 }
 
+// INCRBY – für Top-Up-Gutschriften (mehr als 1 Scan auf einmal)
+async function kvIncrBy(key, amount) {
+  const res = await fetch(`${KV_URL()}/incrby/${key}/${amount}`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN()}` },
+  });
+  if (!res.ok) throw new Error(`KV INCRBY failed: ${res.status}`);
+  const json = await res.json();
+  return json.result;
+}
+
 // ══════════════════════════════════════════════════════════════════
 // REFUND: Gutschrift bei fehlgeschlagenem OpenAI-Call
 //
@@ -307,6 +335,156 @@ async function validateLemonSqueezy(licenseKey) {
   }
 
   return { valid, fromCache: false };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// LS-AKTIVIERUNG: schaltet den Key im LS-Dashboard von "Inactive (0/1)"
+// auf "Active (1/1)".
+//
+// WICHTIG: validate() allein aktiviert NICHTS – es prüft nur, ob der Key
+// gültig ist. Erst ein erfolgreicher activate()-Call verbraucht einen
+// "activation slot" und setzt den Status auf aktiv. Wir rufen das genau
+// EINMAL auf – beim allerersten Request mit diesem Key (also exakt dann,
+// wenn im KV noch kein "license:<key>"-Eintrag existiert, siehe Handler).
+//
+// instance_name ist Pflichtfeld bei LS und identifiziert dieses "Gerät"/
+// diese Installation gegenüber dem Key (zählt gegen das Activation-Limit).
+// Wir nutzen einen stabilen, nicht-personenbezogenen Bezeichner.
+//
+// Rückgabe: { activated, instanceId, licenseKeyId } – licenseKeyId wird
+// im KV gespeichert, damit spätere GET /v1/license-keys/{id}-Calls (für
+// den Top-Up-Recheck) ohne erneuten activate-Call möglich sind.
+// ══════════════════════════════════════════════════════════════════
+async function activateLicenseKey(licenseKey) {
+  console.log('[LEMON SQUEEZY] Aktiviere Key...');
+  const res = await fetch('https://api.lemonsqueezy.com/v1/licenses/activate', {
+    method: 'POST',
+    headers: {
+      'Accept':       'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      license_key:   licenseKey,
+      instance_name: 'focus-flashcards-app',
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+
+  // LS gibt bei bereits voll ausgeschöpftem Activation-Limit
+  // { activated: false, error: "..." } zurück – das ist KEIN Fataler
+  // Fehler für uns (der Key kann trotzdem gültig & nutzbar sein, z.B.
+  // wenn der User den Key auf einem zweiten Gerät einträgt). Wir loggen
+  // es nur und blockieren den Scan-Flow nicht deswegen.
+  if (!data.activated) {
+    console.warn('[LEMON SQUEEZY] Aktivierung nicht durchgeführt:', data.error || data);
+    return { activated: false, instanceId: null, licenseKeyId: data.license_key?.id ?? null };
+  }
+
+  console.log(`[LEMON SQUEEZY] Key aktiviert. Instance: ${data.instance?.id}`);
+  return {
+    activated:    true,
+    instanceId:   data.instance?.id ?? null,
+    licenseKeyId: data.license_key?.id ?? null,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// TOP-UP RE-CHECK: fragt den aktuellen Stand des Keys bei LS ab,
+// bevor ein Scan wegen scansLeft<=0 final abgelehnt wird.
+//
+// Nutzt die AUTHENTIFIZIERTE REST-API (Bearer LEMONSQUEEZY_API_KEY),
+// NICHT die License-API. Braucht die numerische licenseKeyId (im KV unter
+// `license_id:<key>` gespeichert, siehe Handler).
+//
+// Top-Up-Erkennung:
+//   Wir vergleichen das von LS gelieferte `attributes.activation_limit`
+//   mit dem zuletzt bekannten Wert (`license_limit:<key>` im KV).
+//   Ein Top-Up-Produkt in LS, das den Key per "increment activation limit"-
+//   Webhook/Order erhöht, schlägt sich genau hier nieder. Steigt der Wert,
+//   gutschreiben wir die Differenz * SCANS_PER_TOPUP_UNIT als neue Scans.
+//
+// HINWEIS: Falls dein Top-Up-Produkt in LS NICHT das activation_limit
+// erhöht, sondern eine komplett neue Order ohne Limit-Änderung erzeugt,
+// reicht ein reiner license-keys/{id}-GET nicht aus – dann braucht es
+// zusätzlich einen LS-Webhook ("order_created") der die Order direkt dem
+// Key zuordnet und das KV hochzählt. Dieser Re-Check hier ist der
+// synchrone Fallback für den Fall, dass der Webhook (noch) nicht
+// angekommen ist, wenn der User genau in diesem Moment scannt.
+// ══════════════════════════════════════════════════════════════════
+const SCANS_PER_TOPUP_UNIT = 200; // 1 zusätzlicher Activation-Slot = 200 Scans (anpassen an dein Produkt!)
+
+async function getLicenseKeyDetails(licenseKeyId) {
+  const lsApiKey = process.env.LEMONSQUEEZY_API_KEY;
+  if (!lsApiKey) {
+    console.warn('[LEMON SQUEEZY] LEMONSQUEEZY_API_KEY fehlt – Top-Up-Recheck wird übersprungen.');
+    return null;
+  }
+  const res = await fetch(`https://api.lemonsqueezy.com/v1/license-keys/${licenseKeyId}`, {
+    headers: {
+      'Accept':        'application/vnd.api+json',
+      'Authorization': `Bearer ${lsApiKey}`,
+    },
+  });
+  if (!res.ok) {
+    console.warn(`[LEMON SQUEEZY] license-keys/{id} fehlgeschlagen: ${res.status}`);
+    return null;
+  }
+  const json = await res.json().catch(() => null);
+  return json?.data?.attributes ?? null; // { status, activation_limit, activation_usage, ... }
+}
+
+async function checkForTopUp(licenseKey) {
+  try {
+    const licenseKeyId = await kvGet(`license_id:${licenseKey}`);
+    if (!licenseKeyId) {
+      console.log('[TOP-UP CHECK] Keine license_id im KV – Recheck übersprungen.');
+      return false;
+    }
+
+    const attrs = await getLicenseKeyDetails(licenseKeyId);
+    if (!attrs) return false;
+
+    // Disabled/abgelaufene Keys dürfen niemals Scans gutgeschrieben bekommen,
+    // auch wenn das activation_limit aus irgendeinem Grund hoch steht.
+    if (attrs.status === 'disabled' || attrs.status === 'expired') {
+      console.warn(`[TOP-UP CHECK] Key-Status "${attrs.status}" – kein Top-Up gewährt.`);
+      return false;
+    }
+
+    const newLimit = Number(attrs.activation_limit);
+    if (!Number.isFinite(newLimit)) return false;
+
+    const knownLimitRaw = await kvGet(`license_limit:${licenseKey}`);
+    const knownLimit    = knownLimitRaw !== null ? parseInt(knownLimitRaw, 10) : newLimit;
+
+    if (newLimit > knownLimit) {
+      const deltaUnits  = newLimit - knownLimit;
+      const bonusScans  = deltaUnits * SCANS_PER_TOPUP_UNIT;
+
+      console.log(`[TOP-UP CHECK] Limit-Anstieg erkannt: ${knownLimit} → ${newLimit}. Gutschrift: ${bonusScans} Scans.`);
+
+      // Reihenfolge wichtig: ZUERST den neuen Limit-Stand persistieren,
+      // DANN die Scans gutschreiben. Würde ein paralleler Request zwischen
+      // den beiden Schritten denselben Delta nochmal lesen, ist der Limit-
+      // Wert bereits aktualisiert → kein doppeltes Gutschreiben möglich.
+      await kvSet(`license_limit:${licenseKey}`, newLimit);
+      await kvIncrBy(`license:${licenseKey}`, bonusScans);
+      return true;
+    }
+
+    // Limit unverändert, aber wir persistieren ihn beim allerersten Check,
+    // damit zukünftige Vergleiche eine Baseline haben.
+    if (knownLimitRaw === null) {
+      await kvSet(`license_limit:${licenseKey}`, newLimit);
+    }
+    return false;
+  } catch (err) {
+    // Fail-open: Ein fehlgeschlagener Top-Up-Check darf den normalen
+    // "Scans aufgebraucht"-Fehler nicht verhindern, aber auch nicht
+    // versehentlich Scans gutschreiben.
+    console.error('[TOP-UP CHECK] Fehlgeschlagen:', err);
+    return false;
+  }
 }
 
 // ── Cloudflare Turnstile Token validieren ─────────────────────────────────
@@ -513,9 +691,50 @@ export default async function handler(req, res) {
           return res.status(403).json({ error: 'Ungültiger oder abgelaufener Lizenzschlüssel.' });
         }
 
+        // ────────────────────────────────────────────────────────────
+        // LS-AKTIVIERUNG: nur beim allerersten validen Aufruf mit
+        // diesem Key (also genau jetzt, wo noch kein KV-Eintrag
+        // existiert). Setzt den Status im LS-Dashboard auf "Active".
+        // Ein Fehlschlag hier blockiert den Scan-Flow NICHT (fail-open) –
+        // der Key wurde von validateLemonSqueezy() bereits als gültig
+        // bestätigt, ein Aktivierungsproblem ist ein reines LS-Dashboard-
+        // Anzeigeproblem, kein Sicherheitsproblem.
+        let licenseKeyId = null;
+        try {
+          const activation = await activateLicenseKey(licenseKey);
+          licenseKeyId = activation.licenseKeyId;
+          if (licenseKeyId) {
+            await kvSet(`license_id:${licenseKey}`, licenseKeyId);
+          }
+        } catch (err) {
+          console.error('[LEMON SQUEEZY] Aktivierung fehlgeschlagen, fahre fort:', err);
+        }
+
         scansLeft = 200;
         await kvSet(`license:${licenseKey}`, scansLeft);
+        // Baseline für den Top-Up-Recheck setzen (falls Details verfügbar sind).
+        if (licenseKeyId) {
+          const attrs = await getLicenseKeyDetails(licenseKeyId).catch(() => null);
+          if (attrs && Number.isFinite(Number(attrs.activation_limit))) {
+            await kvSet(`license_limit:${licenseKey}`, Number(attrs.activation_limit));
+          }
+        }
         console.log('[KV SET] 200 Scans angelegt.');
+      }
+
+      if (scansLeft <= 0) {
+        // ────────────────────────────────────────────────────────────
+        // TOP-UP RE-CHECK: bevor wir final ablehnen, fragen wir LS,
+        // ob sich das activation_limit erhöht hat (= Top-Up gekauft).
+        // Bei Erfolg wird das KV direkt gutgeschrieben und scansLeft
+        // neu gelesen.
+        // ────────────────────────────────────────────────────────────
+        const toppedUp = await checkForTopUp(licenseKey);
+        if (toppedUp) {
+          const refreshed = await kvGet(`license:${licenseKey}`);
+          scansLeft = refreshed !== null ? parseInt(refreshed, 10) : 0;
+          console.log(`[TOP-UP CHECK] Scans nach Gutschrift: ${scansLeft}`);
+        }
       }
 
       if (scansLeft <= 0) {
