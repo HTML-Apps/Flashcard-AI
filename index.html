@@ -67,7 +67,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <!-- Cloudflare Turnstile -->
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad" defer></script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onloadTurnstileCallback" async defer></script>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -3189,8 +3189,29 @@ You have the right to object at any time to the processing of personal data conc
     } else {
         console.warn('⚠️ Dieser Browser unterstützt keine Service Worker (PWA-Features).');
     }
+    </script>
 
+    <script>
+        window.onloadTurnstileCallback = function () {
+            console.log("✅ Turnstile API ist bereit.");
+            // Hier erst renderst du das Widget
+            _renderTurnstileWidget();
+        };
 
+        function _renderTurnstileWidget() {
+            if (_turnstileRendered) return;
+            
+            try {
+                _turnstileWidgetId = turnstile.render('#turnstile-widget', {
+                    sitekey: '0x4AAAAAADmDM0vIb4pbgSD9',
+                    callback: onTurnstileSuccess,
+                    // ... restliche config
+                });
+                _turnstileRendered = true;
+            } catch (e) {
+                console.error("❌ Render-Fehler:", e);
+            }
+        }
     </script>
 </body>
 </html>
