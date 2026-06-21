@@ -23,11 +23,16 @@ self.addEventListener("install", (event) => {
   
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log("[Service Worker] Caching Core-Assets & CDNs für Version:", CACHE_NAME);
-      return cache.addAll(ASSETS_TO_CACHE);
+      return Promise.all(
+        ASSETS_TO_CACHE.map((url) => {
+          return cache.add(url).catch((err) => {
+            console.error("[Service Worker] Fehler beim Cachen von:", url, err);
+            throw err; // Damit du siehst, wo es knallt
+          });
+        })
+      );
     })
   );
-});
 
 // 2. Aktivieren: Alte Cache-Versionen aufräumen
 self.addEventListener("activate", (event) => {
