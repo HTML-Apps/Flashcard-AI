@@ -33,7 +33,7 @@ self.addEventListener("install", (event) => {
       );
     })
   );
-
+});
 // 2. Aktivieren: Alte Cache-Versionen aufräumen
 self.addEventListener("activate", (event) => {
   event.waitUntil(
