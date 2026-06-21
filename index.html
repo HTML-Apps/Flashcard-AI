@@ -1959,6 +1959,7 @@ You have the right to object at any time to the processing of personal data conc
     let _turnstileRendered = false; // Flag: Widget bereits gerendert (kein Doppel-Render)
     let _turnstileErrorRetries = 0; // Zähler: verhindert unendliche Auto-Retry-Schleife
     const TURNSTILE_MAX_AUTO_RETRIES = 3;
+    let _turnstileRetryTimeoutId = null; // Handle für ausstehenden Auto-Retry (Debounce)
 
     // ════════════════════════════════════════════════════════════════
     // onTurnstileLoad – wird vom Cloudflare-Skript via ?onload= aufgerufen
@@ -2016,16 +2017,24 @@ You have the right to object at any time to the processing of personal data conc
     function onTurnstileError(errorCode) {
         _turnstileToken = null;
 
-        // BUGFIX 300030-Loop:
-        //   _turnstileRendered blieb bisher `true`, obwohl das Widget bei Cloudflare
-        //   tatsächlich abgestürzt/gehängt war. Dadurch blockierte die Guard-Klausel
-        //   in _renderTurnstileWidget() jeden weiteren render()-Versuch dauerhaft,
-        //   während Cloudflares eigenes internes Retry (setInterval in api.js)
-        //   weiter alle paar Sekunden denselben Fehler feuerte → Endlosschleife,
-        //   Scan-Button blieb für immer disabled. Fix: Flag zurücksetzen, damit ein
-        //   erneuter _renderTurnstileWidget()-Aufruf (z.B. via Retry-Button oder
-        //   beim nächsten _showTurnstileIfNeeded()) tatsächlich neu rendern kann.
+        // BUGFIX Race Condition (mehrfach überlappende Fehler):
+        //   Wenn Cloudflare onTurnstileError mehrfach kurz hintereinander feuert
+        //   (z.B. bei 600010), lief vorher bei JEDEM Aufruf turnstile.remove()
+        //   UND ein neuer setTimeout-Retry los — unabhängig davon, ob das Widget
+        //   tatsächlich noch existierte oder der vorherige Retry noch aussteht.
+        //   Das führte zu "Nothing to reset/remove found for provided container"
+        //   (zweiter remove() auf ein bereits entferntes Widget) und zu doppelten,
+        //   parallel laufenden render()-Aufrufen auf denselben Container.
+        //   Fix: Zustand VOR dem Reset merken (hadRenderedWidget), und einen
+        //   evtl. bereits laufenden Retry-Timer canceln, bevor ein neuer geplant
+        //   wird (Debounce statt Stapeln).
+        const hadRenderedWidget = _turnstileRendered;
         _turnstileRendered = false;
+
+        if (_turnstileRetryTimeoutId !== null) {
+            clearTimeout(_turnstileRetryTimeoutId);
+            _turnstileRetryTimeoutId = null;
+        }
 
         // Scan-Button deaktivieren – ohne Token darf kein Scan starten
         const scanBtn = document.getElementById('scan-btn');
@@ -2069,8 +2078,9 @@ You have the right to object at any time to the processing of personal data conc
         //   per postMessage dorthin zu senden → "target origin does not match
         //   recipient window's origin" + "Cannot find Widget cf-chl-widget-xxxxx".
         //   Fix: korrekte Cloudflare-API turnstile.remove() nutzen, die das Widget
-        //   auch intern bei Cloudflare sauber deregistriert.
-        if (window.turnstile) {
+        //   auch intern bei Cloudflare sauber deregistriert. Nur aufrufen, wenn
+        //   zum Zeitpunkt des Fehlers tatsächlich ein Widget gerendert war.
+        if (window.turnstile && hadRenderedWidget) {
             try { window.turnstile.remove('#turnstile-widget'); } catch (_) {}
         }
 
@@ -2079,8 +2089,10 @@ You have the right to object at any time to the processing of personal data conc
         // einem 300030-Fehler die Seite manuell neu laden müssen. Verzögerung
         // vermeidet ein zu schnelles Re-Render in dasselbe Fehlerfenster hinein.
         // Bricht ab, sobald TURNSTILE_MAX_AUTO_RETRIES überschritten ist.
+        // Debounced über _turnstileRetryTimeoutId (siehe oben).
         if (!retriesExhausted) {
-            setTimeout(() => {
+            _turnstileRetryTimeoutId = setTimeout(() => {
+                _turnstileRetryTimeoutId = null;
                 if (!_turnstileRendered && wrapper && !wrapper.classList.contains('hidden')) {
                     _renderTurnstileWidget();
                     if (scanBtn) {
@@ -2117,6 +2129,10 @@ You have the right to object at any time to the processing of personal data conc
 
     function _resetTurnstileWidget() {
         _turnstileToken = null;
+        if (_turnstileRetryTimeoutId !== null) {
+            clearTimeout(_turnstileRetryTimeoutId);
+            _turnstileRetryTimeoutId = null;
+        }
         if (!window.turnstile || !_turnstileRendered) return;
         try { window.turnstile.reset('#turnstile-widget'); } catch (_) {}
         _turnstileRendered = false; // neues render() beim nächsten show erlauben
