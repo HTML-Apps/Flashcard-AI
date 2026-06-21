@@ -34,7 +34,7 @@ export const config = {
   api: { bodyParser: { sizeLimit: '4mb' } },
 };
 
-const FREE_TRIAL_LIMIT        = 0;
+const FREE_TRIAL_LIMIT        = 2;
 const FREE_TRIAL_TTL_SEC      = 86400; // 24 Stunden – IP-Zähler resettet sich automatisch
 const POLICY_COOLDOWN_SEC     = 900;   // 15 Minuten Cooldown statt permanenter Ban
 const INVALID_KEY_CACHE_SEC   = 600;   // 10 Minuten Negative-Cache für ungültige Lemon-Squeezy-Keys
