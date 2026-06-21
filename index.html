@@ -42,7 +42,7 @@
                     https://challenges.cloudflare.com/turnstile/
                     https://app.lemonsqueezy.com
                     https://assets.lemonsqueezy.com;
-        worker-src  'self' blob:;
+        worker-src  'self' blob: https://challenges.cloudflare.com;
         object-src  'none';
         base-uri    'self';
         ">
@@ -2097,8 +2097,9 @@ You have the right to object at any time to the processing of personal data conc
         //   Fix: korrekte Cloudflare-API turnstile.remove() nutzen, die das Widget
         //   auch intern bei Cloudflare sauber deregistriert. Nur aufrufen, wenn
         //   zum Zeitpunkt des Fehlers tatsächlich ein Widget gerendert war.
-        if (window.turnstile && hadRenderedWidget) {
-            try { window.turnstile.remove('#turnstile-widget'); } catch (_) {}
+        // WICHTIG: remove() ebenfalls mit der _turnstileWidgetId aufrufen
+        if (window.turnstile && hadRenderedWidget && _turnstileWidgetId !== null) {
+            try { window.turnstile.remove(_turnstileWidgetId); } catch (_) {}
         }
 
         // Automatischer Recovery-Versuch nach kurzer Verzögerung (statt erst
@@ -2120,18 +2121,15 @@ You have the right to object at any time to the processing of personal data conc
         }
     }
 
-    // ── Internes Render-Helper (verhindert Doppel-Rendering) ──────
+    // NEU: Variable zum Speichern der ID
+    let _turnstileWidgetId = null;
+
     function _renderTurnstileWidget() {
         if (_turnstileRendered || !window.turnstile) return;
-        // BUGFIX Fehler 600010:
-        //   cf-turnstile Klasse → Cloudflare rendert Widget sofort beim Skript-Load,
-        //   auch wenn Container noch `hidden` ist → Fehler 600010 ("widget not found
-        //   in visible area") → onTurnstileError() feuert sofort.
-        //   Fix: cf-turnstile Klasse entfernt. Explizites render() erst nachdem
-        //   hidden-Klasse weg ist. Alle Optionen (sitekey, callbacks) programmatisch.
         _turnstileRendered = true;
         try {
-            window.turnstile.render('#turnstile-widget', {
+            // WICHTIG: Rückgabewert (Widget-ID) speichern!
+            _turnstileWidgetId = window.turnstile.render('#turnstile-widget', {
                 sitekey:            '0x4AAAAAADmDM0vIb4pbgSD9',
                 theme:              'auto',
                 callback:           onTurnstileSuccess,
@@ -2140,7 +2138,7 @@ You have the right to object at any time to the processing of personal data conc
             });
         } catch (err) {
             console.warn('[Turnstile] render() fehlgeschlagen:', err);
-            _turnstileRendered = false; // Retry beim nächsten Aufruf erlauben
+            _turnstileRendered = false; 
         }
     }
 
@@ -2150,9 +2148,10 @@ You have the right to object at any time to the processing of personal data conc
             clearTimeout(_turnstileRetryTimeoutId);
             _turnstileRetryTimeoutId = null;
         }
-        if (!window.turnstile || !_turnstileRendered) return;
-        try { window.turnstile.reset('#turnstile-widget'); } catch (_) {}
-        _turnstileRendered = false; // neues render() beim nächsten show erlauben
+        // WICHTIG: reset() mit der _turnstileWidgetId aufrufen
+        if (!window.turnstile || !_turnstileRendered || _turnstileWidgetId === null) return;
+        try { window.turnstile.reset(_turnstileWidgetId); } catch (_) {}
+        _turnstileRendered = false; 
     }
 
     function _showTurnstileIfNeeded() {
