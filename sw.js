@@ -1,5 +1,5 @@
 // sw.js - Gemergte & optimierte Version für Flashcard-AI
-const CACHE_NAME = "Flashcard-AI_v5"; // Version erhöht: Tailwind CDN auf jsDelivr umgestellt
+const CACHE_NAME = "Flashcard-AI_v4"; // Version erhöht: Tailwind CDN auf jsDelivr umgestellt
 
 // Assets, die für den vollständigen Offline-Betrieb zwingend benötigt werden
 const ASSETS_TO_CACHE = [
@@ -10,7 +10,7 @@ const ASSETS_TO_CACHE = [
   
   // Externe CDNs (Sicherheitsnetz für Offline-Modus)
   // jsDelivr setzt korrekte CORS-Header → SW kann cachen (cdn.tailwindcss.com konnte das nicht)
-  "https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.16/tailwindcss.js",
+  // "https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.16/tailwindcss.js",
   "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"
@@ -25,9 +25,14 @@ self.addEventListener("install", (event) => {
     caches.open(CACHE_NAME).then((cache) => {
       return Promise.all(
         ASSETS_TO_CACHE.map((url) => {
+          // WICHTIG: Fehler bei einzelnen Assets dürfen die komplette
+          // Installation nicht mehr scheitern lassen. Schlägt install()
+          // fehl (z.B. weil eine CDN-Datei CORS-Probleme macht oder
+          // offline nicht erreichbar ist), kommt der SW nie in den
+          // Status "activated" → kein "beforeinstallprompt" → App lässt
+          // sich nicht mehr installieren.
           return cache.add(url).catch((err) => {
-            console.error("[Service Worker] Fehler beim Cachen von:", url, err);
-            throw err; // Damit du siehst, wo es knallt
+            console.warn("[Service Worker] Konnte nicht gecacht werden (übersprungen):", url, err);
           });
         })
       );
