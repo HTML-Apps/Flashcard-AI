@@ -2013,6 +2013,17 @@ You have the right to object at any time to the processing of personal data conc
     function onTurnstileError(errorCode) {
         _turnstileToken = null;
 
+        // BUGFIX 300030-Loop:
+        //   _turnstileRendered blieb bisher `true`, obwohl das Widget bei Cloudflare
+        //   tatsächlich abgestürzt/gehängt war. Dadurch blockierte die Guard-Klausel
+        //   in _renderTurnstileWidget() jeden weiteren render()-Versuch dauerhaft,
+        //   während Cloudflares eigenes internes Retry (setInterval in api.js)
+        //   weiter alle paar Sekunden denselben Fehler feuerte → Endlosschleife,
+        //   Scan-Button blieb für immer disabled. Fix: Flag zurücksetzen, damit ein
+        //   erneuter _renderTurnstileWidget()-Aufruf (z.B. via Retry-Button oder
+        //   beim nächsten _showTurnstileIfNeeded()) tatsächlich neu rendern kann.
+        _turnstileRendered = false;
+
         // Scan-Button deaktivieren – ohne Token darf kein Scan starten
         const scanBtn = document.getElementById('scan-btn');
         if (scanBtn) {
@@ -2029,10 +2040,30 @@ You have the right to object at any time to the processing of personal data conc
         if (_scanAttempted || widgetVisible) {
             setScanError(
                 currentLang === 'de'
-                    ? 'Sicherheitsprüfung fehlgeschlagen. Bitte Seite neu laden.'
-                    : 'Security check failed. Please reload the page.'
+                    ? 'Sicherheitsprüfung wird neu geladen, bitte einen Moment warten …'
+                    : 'Security check is reloading, please wait a moment …'
             );
         }
+
+        // Container leeren, damit ein evtl. hängendes/halbtotes iframe nicht
+        // im Weg steht, falls später erneut gerendert wird.
+        const widgetEl = document.getElementById('turnstile-widget');
+        if (widgetEl) {
+            widgetEl.innerHTML = '';
+        }
+
+        // Automatischer Recovery-Versuch nach kurzer Verzögerung (statt erst
+        // beim nächsten View-Wechsel): verhindert, dass Free-Tier-Nutzer nach
+        // einem 300030-Fehler die Seite manuell neu laden müssen. Verzögerung
+        // vermeidet ein zu schnelles Re-Render in dasselbe Fehlerfenster hinein.
+        setTimeout(() => {
+            if (!_turnstileRendered && wrapper && !wrapper.classList.contains('hidden')) {
+                _renderTurnstileWidget();
+                if (scanBtn) {
+                    scanBtn.disabled = !_turnstileToken;
+                }
+            }
+        }, 2000);
     }
 
     // ── Internes Render-Helper (verhindert Doppel-Rendering) ──────
