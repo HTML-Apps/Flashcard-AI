@@ -10,7 +10,7 @@ const ASSETS_TO_CACHE = [
   
   // Externe CDNs (Sicherheitsnetz für Offline-Modus)
   // jsDelivr setzt korrekte CORS-Header → SW kann cachen (cdn.tailwindcss.com konnte das nicht)
-  "https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.16/tailwindcss.js",
+  // "https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.16/tailwindcss.js",
   "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"
