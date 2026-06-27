@@ -37,6 +37,9 @@ const FREE_TRIAL_LIMIT        = 5;
 const FREE_TRIAL_TTL_SEC      = 86400; // 24 Stunden – IP-Zähler resettet sich automatisch
 const POLICY_COOLDOWN_SEC     = 900;   // 15 Minuten Cooldown statt permanenter Ban
 const INVALID_KEY_CACHE_SEC   = 600;   // 10 Minuten Negative-Cache für ungültige Lemon-Squeezy-Keys
+const MAX_IMAGE_BYTES         = 2 * 1024 * 1024; // 2 MB – ausreichend für hochauflösende Fotos
+const INVALID_KEY_LIMIT       = 5;     // Max. ungültige Lizenzschlüssel pro IP (FIX 5)
+const INVALID_KEY_WINDOW_SEC  = 900;   // 15 Minuten Fenster für Fehlversuche (FIX 5)
 
 // ── i18n-Texte für Content-Policy-Fehler ──────────────────────────────────
 // Beide Sprachen werden in der Response mitgeliefert, damit das Frontend
@@ -274,18 +277,126 @@ async function refundIfPaidLicense(isPaidLicense, licenseKey) {
   }
 }
 
-// ── IP-Adresse: Vercel-native Header, resistent gegen X-Forwarded-For-Spoofing
+// ══════════════════════════════════════════════════════════════════
+// SECURITY FIX 3 – IP-Spoofing: nur dem Vercel-nativen Header trauen
+//
+// x-real-ip und x-forwarded-for können vom Client beliebig gesetzt werden
+// (z.B. "X-Real-IP: 1.2.3.4") → Rate-Limiting & Blacklist wären sonst
+// komplett umgehbar. x-vercel-forwarded-for wird von Vercel's Edge Network
+// serverseitig gesetzt und Client-Werte werden dabei überschrieben.
+// Dokumentation: https://vercel.com/docs/edge-network/headers#x-vercel-forwarded-for
+// ══════════════════════════════════════════════════════════════════
 function getClientIp(req) {
-  const realIp = req.headers['x-real-ip'];
-  if (realIp) return realIp.trim();
-
+  // x-vercel-forwarded-for: von Vercel gesetzt, nicht vom Client manipulierbar.
+  // Format: "IP1, IP2, ..." – erstes Element ist die echte Client-IP.
   const vercelIp = req.headers['x-vercel-forwarded-for'];
-  if (vercelIp) return vercelIp.split(',')[0].trim();
+  if (vercelIp) {
+    const ip = vercelIp.split(',')[0].trim();
+    if (ip) return ip;
+  }
 
-  const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) return forwarded.split(',')[0].trim();
+  // Fallback für lokale Entwicklung (npm run dev / vercel dev): hier gibt es
+  // kein Vercel Edge Network und damit kein x-vercel-forwarded-for.
+  const socketIp = req.socket?.remoteAddress;
+  if (socketIp) return socketIp;
 
-  return req.socket?.remoteAddress || 'unknown';
+  // Letzter Ausweg – sollte in Produktion nie erreicht werden. 'unknown'
+  // führt zu einem einzigen gemeinsamen Bucket für alle unidentifizierbaren
+  // Requests → konservatives Fail-Safe.
+  return 'unknown';
+
+  // EXPLIZIT NICHT VERWENDET (Spoofing-Vektoren, Client-kontrollierbar):
+  //   req.headers['x-real-ip']
+  //   req.headers['x-forwarded-for']
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SECURITY FIX 4 – Ressourcenerschöpfung: Robuste Base64-Bildvalidierung
+//
+// Validiert einen Base64-String auf Größe und Bildformat, BEVOR er an
+// OpenAI weitergegeben wird. Wirft KEINEN Fehler – gibt ein Ergebnis-
+// objekt zurück, damit der Handler die passende HTTP-Response formuliert.
+//
+// @param {string} base64 – Reiner Base64-String (ohne data:...-Prefix)
+// @returns {{ valid: boolean, reason?: string }}
+// ══════════════════════════════════════════════════════════════════
+function validateBase64Image(base64) {
+  // ── Schritt 1: Größe schätzen (schnell, ohne vollständiges Dekodieren) ──
+  // Base64 kodiert 3 Bytes als 4 Zeichen. Padding ('=') abziehen.
+  const paddingCount   = (base64.match(/={0,2}$/) || [''])[0].length;
+  const estimatedBytes = Math.floor((base64.length * 3) / 4) - paddingCount;
+
+  if (estimatedBytes > MAX_IMAGE_BYTES) {
+    return {
+      valid: false,
+      reason: `Bild zu groß: ~${Math.round(estimatedBytes / 1024 / 1024 * 10) / 10} MB (max. ${MAX_IMAGE_BYTES / 1024 / 1024} MB).`,
+    };
+  }
+
+  // ── Schritt 2: Magic Bytes prüfen (nur die ersten ~12 Bytes dekodieren) ──
+  let headerBytes;
+  try {
+    headerBytes = Buffer.from(base64.slice(0, 16), 'base64');
+  } catch {
+    return { valid: false, reason: 'Base64-Dekodierung fehlgeschlagen.' };
+  }
+
+  if (headerBytes.length < 4) {
+    return { valid: false, reason: 'Bild zu kurz für Format-Erkennung.' };
+  }
+
+  const isJpeg = headerBytes[0] === 0xFF && headerBytes[1] === 0xD8 && headerBytes[2] === 0xFF;
+
+  const isPng  = headerBytes[0] === 0x89 &&
+                 headerBytes[1] === 0x50 &&
+                 headerBytes[2] === 0x4E &&
+                 headerBytes[3] === 0x47;
+
+  // WebP: Bytes 0-3 = 'RIFF', Bytes 8-11 = 'WEBP'
+  const isWebP = headerBytes[0] === 0x52 &&
+                 headerBytes[1] === 0x49 &&
+                 headerBytes[2] === 0x46 &&
+                 headerBytes[3] === 0x46 &&
+                 headerBytes.length >= 12 &&
+                 headerBytes[8]  === 0x57 &&
+                 headerBytes[9]  === 0x45 &&
+                 headerBytes[10] === 0x42 &&
+                 headerBytes[11] === 0x50;
+
+  if (!isJpeg && !isPng && !isWebP) {
+    return {
+      valid: false,
+      reason: 'Ungültiges Bildformat. Nur JPEG, PNG und WebP sind erlaubt.',
+    };
+  }
+
+  return { valid: true };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SECURITY FIX 5 – Caching-Bypass & LS API-Spam: Failed-Auth-Rate-Limiter
+//
+// Separater Redis-Zähler pro IP, der NUR bei fehlgeschlagenen Lizenz-
+// Authentifizierungen hochgezählt wird. Bei ≥ INVALID_KEY_LIMIT Fehlern
+// innerhalb von INVALID_KEY_WINDOW_SEC Sekunden wird die IP sofort
+// blockiert – BEVOR Negative-Cache oder Lemon-Squeezy-API konsultiert werden.
+// ══════════════════════════════════════════════════════════════════
+async function checkInvalidKeyRateLimit(ip) {
+  const key   = `rate:invalid_key:${hashKey(ip)}`;
+  const json  = await redisCall(`/get/${encodeURIComponent(key)}`);
+  const count = parseInt(json?.result, 10) || 0;
+  return count >= INVALID_KEY_LIMIT;
+}
+
+async function recordInvalidKeyAttempt(ip) {
+  const key = `rate:invalid_key:${hashKey(ip)}`;
+  try {
+    const count = await redisIncrWithTTL(key, INVALID_KEY_WINDOW_SEC);
+    console.warn(`[FAILED AUTH] Fehlversuch #${count} für IP-Hash (${INVALID_KEY_LIMIT - count} verbleibend bis Block).`);
+  } catch (err) {
+    // Fail-open: Ein Fehler beim Zählen darf den Hauptpfad nicht blockieren.
+    console.error('[FAILED AUTH] Zähler-Update fehlgeschlagen:', err);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -432,7 +543,39 @@ async function getLicenseKeyDetails(licenseKeyId) {
   return json?.data?.attributes ?? null; // { status, activation_limit, activation_usage, ... }
 }
 
+// ══════════════════════════════════════════════════════════════════
+// SECURITY FIX 1 – Race Condition (TOCTOU) beim Top-Up: Redis-Mutex
+//
+// SET NX (= "set if not exists") als Distributed Lock:
+//   - Vor dem Check: Lock mit kurzer TTL setzen.
+//   - Nur der Gewinner führt den Top-Up durch, Verlierer bekommen
+//     sofort false (kein Blocking nötig).
+//   - Lock wird im finally-Block immer freigegeben, auch bei Fehler.
+// ══════════════════════════════════════════════════════════════════
+async function acquireRedisLock(lockKey, ttlSeconds = 15) {
+  const path = `/set/${encodeURIComponent(lockKey)}/1/NX/EX/${ttlSeconds}`;
+  const json = await redisCall(path, 'POST');
+  return json?.result === 'OK'; // true = Lock erworben, false = bereits vergeben
+}
+
+async function releaseRedisLock(lockKey) {
+  await redisCall(`/del/${encodeURIComponent(lockKey)}`, 'POST').catch(err =>
+    console.error('[MUTEX] Lock-Release fehlgeschlagen:', err)
+  );
+}
+
 async function checkForTopUp(licenseKey) {
+  const lockKey  = `lock:topup:${hashKey(licenseKey)}`;
+  const acquired = await acquireRedisLock(lockKey, 15).catch(() => false);
+
+  if (!acquired) {
+    // Ein anderer Request führt gerade den Top-Up für denselben Key durch.
+    // Kein Fehler – der parallele Request schreibt das korrekte Ergebnis,
+    // der aufrufende Handler liest scansLeft danach neu aus dem KV.
+    console.log('[MUTEX] Top-Up-Lock bereits vergeben, überspringe Recheck.');
+    return false;
+  }
+
   try {
     const licenseKeyId = await kvGet(`license_id:${licenseKey}`);
     if (!licenseKeyId) {
@@ -457,32 +600,30 @@ async function checkForTopUp(licenseKey) {
     const knownLimit    = knownLimitRaw !== null ? parseInt(knownLimitRaw, 10) : newLimit;
 
     if (newLimit > knownLimit) {
-      const deltaUnits  = newLimit - knownLimit;
-      const bonusScans  = deltaUnits * SCANS_PER_TOPUP_UNIT;
+      const deltaUnits = newLimit - knownLimit;
+      const bonusScans = deltaUnits * SCANS_PER_TOPUP_UNIT;
 
       console.log(`[TOP-UP CHECK] Limit-Anstieg erkannt: ${knownLimit} → ${newLimit}. Gutschrift: ${bonusScans} Scans.`);
 
-      // Reihenfolge wichtig: ZUERST den neuen Limit-Stand persistieren,
-      // DANN die Scans gutschreiben. Würde ein paralleler Request zwischen
-      // den beiden Schritten denselben Delta nochmal lesen, ist der Limit-
-      // Wert bereits aktualisiert → kein doppeltes Gutschreiben möglich.
+      // WICHTIG: Reihenfolge ist jetzt atomar durch den Lock gesichert.
+      // Kein paralleler Request kann zwischen diesen beiden Writes stören.
       await kvSet(`license_limit:${licenseKey}`, newLimit);
       await kvIncrBy(`license:${licenseKey}`, bonusScans);
       return true;
     }
 
-    // Limit unverändert, aber wir persistieren ihn beim allerersten Check,
-    // damit zukünftige Vergleiche eine Baseline haben.
     if (knownLimitRaw === null) {
       await kvSet(`license_limit:${licenseKey}`, newLimit);
     }
     return false;
   } catch (err) {
-    // Fail-open: Ein fehlgeschlagener Top-Up-Check darf den normalen
-    // "Scans aufgebraucht"-Fehler nicht verhindern, aber auch nicht
-    // versehentlich Scans gutschreiben.
     console.error('[TOP-UP CHECK] Fehlgeschlagen:', err);
     return false;
+  } finally {
+    // Lock IMMER freigeben – auch bei Exception – damit keine Deadlocks
+    // entstehen. Die 15s TTL ist das Fail-Safe, falls dieser Block aus
+    // irgendeinem Grund nicht erreicht wird.
+    await releaseRedisLock(lockKey);
   }
 }
 
@@ -630,6 +771,16 @@ export default async function handler(req, res) {
     const base64Data = image.includes(',') ? image.split(',')[1] : image;
 
     // ════════════════════════════════════════════════════════════════
+    // SECURITY FIX 4: Bild validieren BEVOR Credits abgezogen oder
+    // OpenAI kontaktiert wird (Größe + Magic-Bytes-Format-Check).
+    // ════════════════════════════════════════════════════════════════
+    const imageValidation = validateBase64Image(base64Data);
+    if (!imageValidation.valid) {
+      console.warn('[VALIDATION] Ungültiges Bild:', imageValidation.reason);
+      return res.status(400).json({ error: imageValidation.reason });
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // B) PAID LICENSE – Lemon Squeezy + KV Scan-Konto
     //    Negative Caching ist jetzt in validateLemonSqueezy() integriert.
     // ════════════════════════════════════════════════════════════════
@@ -661,11 +812,32 @@ export default async function handler(req, res) {
       console.log(`[KV GET] Scans verbleibend: ${scansLeft}`);
 
       if (scansLeft === null || isNaN(scansLeft)) {
+        // ────────────────────────────────────────────────────────────
+        // SECURITY FIX 5: Failed-Auth-Rate-Limit prüfen BEVOR Negative-
+        // Cache oder die LS-API kontaktiert werden. Verhindert, dass ein
+        // Angreifer durch endloses Senden neuer, nie zuvor gesehener
+        // Strings die LS-API floodet (jeder verfehlt den Negative-Cache).
+        // ────────────────────────────────────────────────────────────
+        const clientIp           = getClientIp(req);
+        const isFailedAuthBlocked = await checkInvalidKeyRateLimit(clientIp).catch(() => false);
+        if (isFailedAuthBlocked) {
+          console.warn('[FAILED AUTH] IP hat zu viele ungültige Keys gesendet – Block ohne LS-Call.');
+          return res.status(429).json({
+            error: 'Zu viele fehlgeschlagene Versuche. Bitte warte 15 Minuten.',
+            retryAfter: INVALID_KEY_WINDOW_SEC,
+          });
+        }
+
         // validateLemonSqueezy() prüft Negative-Cache intern,
         // ruft LS-API nur wenn nötig, und schreibt bei Fehler in Cache.
         const { valid, fromCache } = await validateLemonSqueezy(licenseKey);
 
         if (!valid) {
+          // FIX 5: Fehlversuch zählen (darf die Response nicht verzögern,
+          // aber muss vor dem return awaited werden, da Vercel den Container
+          // sofort nach der Response einfriert – siehe Kommentar bei redisLog).
+          await recordInvalidKeyAttempt(clientIp).catch(() => {});
+
           const reason = fromCache ? 'aus Cache' : 'von LS-API';
           console.warn(`[BLOCKIERT] Ungültiger Lizenzschlüssel (${reason}).`);
           return res.status(403).json({ error: 'Ungültiger oder abgelaufener Lizenzschlüssel.' });
