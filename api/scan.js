@@ -7,7 +7,6 @@
 //   KV_REST_API_URL          – Upstash KV URL  (für Lizenz-Keys)
 //   KV_REST_API_TOKEN        – Upstash KV token (für Lizenz-Keys)
 //   SECRET_MASTER_KEY        – Dein eigener Test-Key (unbegrenzte Scans)
-//   TURNSTILE_SECRET_KEY     – Cloudflare Turnstile Secret Key (Bot-Schutz für Free-Tier)
 //   LEMONSQUEEZY_API_KEY     – LS "API Key" (Settings → API), NICHT der License-Key!
 //                              Wird nur für die authentifizierte REST-API
 //                              (GET /v1/license-keys/{id}) benötigt, NICHT für
@@ -487,22 +486,6 @@ async function checkForTopUp(licenseKey) {
   }
 }
 
-// ── Cloudflare Turnstile Token validieren ─────────────────────────────────
-async function validateTurnstileToken(token, ip) {
-  const formData = new URLSearchParams({
-    secret:   process.env.TURNSTILE_SECRET_KEY || '',
-    response: token,
-    remoteip: ip,
-  });
-  const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    formData,
-  });
-  const data = await res.json();
-  return data.success === true;
-}
-
 // ── Haupt-Handler ──────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   // CORS
@@ -567,22 +550,19 @@ export default async function handler(req, res) {
   console.log(`[API START] Master: ${isMasterKey} | FreeTrial: ${isFreeTrial}`);
 
   // ════════════════════════════════════════════════════════════════
-  // TURNSTILE: Bot-Schutz für Free-Tier-Zugriff
+  // HONEYPOT: Bot-Schutz für Free-Tier-Zugriff
+  //
+  // Das Feld "trap" ist ein unsichtbares Input-Feld im Frontend.
+  // Echte Nutzer sehen und füllen es nie aus (display:none + tabindex=-1).
+  // Bots, die Formulare automatisch befüllen, füllen es typischerweise
+  // mit Dummy-Werten aus → sofortige Ablehnung ohne OpenAI-Call.
   // ════════════════════════════════════════════════════════════════
   if (isFreeTrial) {
-    const { turnstileToken } = req.body || {};
-    if (!turnstileToken) {
-      return res.status(403).json({ error: 'TURNSTILE_MISSING', turnstile: true });
-    }
-    try {
-      const ip    = getClientIp(req);
-      const valid = await validateTurnstileToken(turnstileToken, ip);
-      if (!valid) {
-        return res.status(403).json({ error: 'TURNSTILE_INVALID', turnstile: true });
-      }
-    } catch (err) {
-      console.error('[TURNSTILE] Validierung fehlgeschlagen:', err);
-      return res.status(403).json({ error: 'TURNSTILE_ERROR', turnstile: true });
+    const { trap } = req.body || {};
+    if (trap && String(trap).trim().length > 0) {
+      console.warn('[HONEYPOT] Bot erkannt – Anfrage abgelehnt.');
+      // Absichtlich unspezifischer Fehler: kein Hinweis auf den Honeypot
+      return res.status(400).json({ error: 'Ungültige Anfrage.' });
     }
   }
 

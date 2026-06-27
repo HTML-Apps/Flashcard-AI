@@ -10,12 +10,12 @@
       ───────────────────────
       Schützt vor XSS und Supply-Chain-Angriffen.
       Erlaubt ausschließlich die tatsächlich genutzten externen Quellen:
-        • script-src  – Tailwind CDN, cdnjs (Cropper.js), Cloudflare Turnstile
+        • script-src  – Tailwind CDN, cdnjs (Cropper.js), Lemon Squeezy
         • style-src   – cdnjs (FontAwesome, Cropper.js) + 'unsafe-inline' für
                         Tailwinds JIT-Runtime (schreibt dynamisch <style>-Tags)
         • img-src     – data: (Base64-Vorschau), blob: (Cropper-Canvas-Export)
-        • connect-src – /api/scan (Vercel Serverless), Cloudflare Turnstile-Verify
-        • frame-src   – Cloudflare Turnstile (rendert in eigenem iframe)
+        • connect-src – /api/scan (Vercel Serverless), Lemon Squeezy
+        • frame-src   – Lemon Squeezy
         • object-src  – none (deaktiviert Flash/Plugin-Vektoren komplett)
         • base-uri    – self (verhindert Base-Tag-Hijacking)
     -->
@@ -24,7 +24,6 @@
         script-src  'self' 'unsafe-inline'
                     https://cdn.tailwindcss.com
                     https://cdnjs.cloudflare.com
-                    https://challenges.cloudflare.com
                     https://app.lemonsqueezy.com
                     https://assets.lemonsqueezy.com;
                     
@@ -34,15 +33,12 @@
                     https://cdnjs.cloudflare.com;
         img-src     'self' data: blob:;
         connect-src 'self'
-                    https://challenges.cloudflare.com
                     https://app.lemonsqueezy.com
                     https://api.lemonsqueezy.com
                     https://assets.lemonsqueezy.com;
-        frame-src   https://challenges.cloudflare.com
-                    https://challenges.cloudflare.com/turnstile/
-                    https://app.lemonsqueezy.com
+        frame-src   https://app.lemonsqueezy.com
                     https://assets.lemonsqueezy.com;
-        worker-src  'self' blob: https://challenges.cloudflare.com;
+        worker-src  'self' blob:;
         object-src  'none';
         base-uri    'self';
         ">
@@ -65,9 +61,6 @@
     <!-- Cropper.js -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-
-    <!-- Cloudflare Turnstile -->
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onloadTurnstileCallback" async defer></script>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -504,10 +497,8 @@
                         </button>
                     </div>
 
-                    <!-- Cloudflare Turnstile Widget (nur für Free-Tier sichtbar) -->
-                    <div id="turnstile-wrapper" class="hidden w-full flex justify-center">
-                        <div id="turnstile-widget"></div>
-                    </div>
+                    <!-- Honeypot-Feld (unsichtbar für echte Nutzer, wird von Bots ausgefüllt) -->
+                    <input type="text" id="hp-email" name="email" style="display:none" tabindex="-1" autocomplete="off" aria-hidden="true">
 
                     <button id="scan-btn" onclick="startAIScan()" disabled class="w-full accent-bg accent-bg-hover text-white py-4 rounded-2xl font-bold accent-shadow transition-colors active:scale-95 flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> <span data-i18n="scan_step2_btn"></span>
@@ -933,8 +924,7 @@
             settings_license_placeholder: 'z.B. FOCS-ABCD-1234',
             scan_error_no_key: 'Bitte gib deinen Lizenzschlüssel in den Einstellungen ein.',
             scan_error_limit_reached: 'Kostenlose Scans aufgebraucht. Bitte gib einen Lizenzschlüssel ein.',
-            scan_error_turnstile_required: 'Bitte bestätige zuerst, dass du kein Roboter bist.',
-            scan_error_turnstile_failed: 'Sicherheitsprüfung fehlgeschlagen. Bitte lade die Seite neu und versuche es erneut.',
+
 
             settings_scan_counter:'Scans verwendet',
             settings_scan_free:    (used, limit) => `${used} / ${limit} (Kostenlos)`,
@@ -1148,8 +1138,7 @@ Sie haben das Recht, jederzeit gegen die Verarbeitung von personenbezogenen Date
             settings_license_placeholder: 'e.g. FOCS-ABCD-1234',
             scan_error_no_key: 'Please enter your license key in settings.',
             scan_error_limit_reached: 'Free scans exhausted. Please enter a license key.',
-            scan_error_turnstile_required: 'Please confirm you are not a robot first.',
-            scan_error_turnstile_failed: 'Security check failed. Please reload the page and try again.',
+
 
             settings_scan_counter:'Scans used',
             settings_scan_free:    (used, limit) => `${used} / ${limit} (Free)`,
@@ -1705,7 +1694,7 @@ You have the right to object at any time to the processing of personal data conc
         if (viewName === 'list')        renderDeckOverview();
         if (viewName === 'goals')       updateGoalUI();
         if (viewName === 'learn')       initLearnView();
-        if (viewName === 'scan')        { populateScanDeckSelector(); _showTurnstileIfNeeded(); }
+        if (viewName === 'scan')        { populateScanDeckSelector(); }
         if (viewName === 'deck-detail') renderDeckDetail();
     }
 
@@ -1957,227 +1946,12 @@ You have the right to object at any time to the processing of personal data conc
         else     { box.classList.add('hidden'); text.textContent = ''; }
     }
 
-    // ── Turnstile Callbacks ──
-    let _turnstileToken    = null;
     let _scanAttempted     = false; // Flag: wird true wenn Nutzer aktiv auf "Scannen" drückt
-    let _turnstileReady    = false; // Flag: Cloudflare-Skript vollständig geladen
-    let _turnstileRendered = false; // Flag: Widget bereits gerendert (kein Doppel-Render)
-    let _turnstileErrorRetries = 0; // Zähler: verhindert unendliche Auto-Retry-Schleife
-    const TURNSTILE_MAX_AUTO_RETRIES = 3;
-    let _turnstileRetryTimeoutId = null; // Handle für ausstehenden Auto-Retry (Debounce)
-
-    // ════════════════════════════════════════════════════════════════
-    // onTurnstileLoad – wird vom Cloudflare-Skript via ?onload= aufgerufen
-    //
-    // Race-Condition-Problem (Fehler 400020) ohne onload:
-    //   Das Skript lädt async. Falls _showTurnstileIfNeeded() ausgeführt
-    //   wird bevor window.turnstile definiert ist, schlägt turnstile.render()
-    //   mit "400020: Invalid sitekey" oder einem TypeError fehl.
-    //
-    // Lösung:
-    //   Cloudflare ruft onTurnstileLoad() auf sobald das Skript vollständig
-    //   ausgeführt und window.turnstile bereit ist. Erst dann rendern wir.
-    //   Das ?onload=onTurnstileLoad Query-Param im Script-Tag aktiviert dies.
-    // ════════════════════════════════════════════════════════════════
-    function onTurnstileLoad() {
-        _turnstileReady = true;
-        // Falls _showTurnstileIfNeeded() bereits aufgerufen wurde (View war schon aktiv),
-        // jetzt nachholen was damals übersprungen wurde.
-        const wrapper = document.getElementById('turnstile-wrapper');
-        if (wrapper && !wrapper.classList.contains('hidden') && !_turnstileRendered) {
-            _renderTurnstileWidget();
-        }
-    }
-
-    function onTurnstileSuccess(token) {
-        _turnstileToken = token;
-        _turnstileErrorRetries = 0; // Erfolgreich gelöst → Fehlerzähler zurücksetzen
-        // Scan-Button aktivieren sobald Token vorliegt und Bild gewählt
-        const scanBtn = document.getElementById('scan-btn');
-        if (scanBtn && window._scanImageBase64) {
-            scanBtn.disabled = false;
-        }
-        // Widget nach erfolgreicher Validierung (grüner Haken) ausblenden.
-        // Wird bei Bedarf (neues Token nötig) über _showTurnstileIfNeeded()
-        // bzw. das Error-/Reset-Handling wieder eingeblendet.
-        const wrapper = document.getElementById('turnstile-wrapper');
-        if (wrapper) wrapper.classList.add('hidden');
-    }
-
-    function onTurnstileExpired() {
-        _turnstileToken = null;
-        // Token abgelaufen → Widget wieder zeigen, damit Nutzer erneut lösen kann
-        const wrapper = document.getElementById('turnstile-wrapper');
-        if (wrapper) wrapper.classList.remove('hidden');
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // onTurnstileError – Fehler-Callback des Cloudflare Turnstile Widgets
-    //
-    // Häufige Ursachen:
-    //   - Netzwerkfehler / Cloudflare nicht erreichbar
-    //   - Ungültiger Site-Key (Dev-Umgebung)
-    //   - Browser blockiert Cloudflare-Ressourcen (z.B. Ad-Blocker)
-    //
-    // Design-Entscheidungen:
-    //   1. Kein console.error() – verhindert Log-Flooding bei wiederkehrenden Fehlern
-    //   2. Scan-Button deaktivieren – verhindert Scan ohne funktionierenden Bot-Schutz
-    //   3. Benutzerfreundliche Meldung nur anzeigen wenn relevant (nach Scan-Versuch
-    //      ODER wenn Widget bereits sichtbar war → Nutzer erwartet Funktion)
-    //   4. _scanAttempted-Guard bleibt für den Fall dass der Fehler beim initialen
-    //      Widget-Laden in Dev-Umgebungen auftritt (kein False-Positive für den User)
-    // ════════════════════════════════════════════════════════════════
-    function onTurnstileError(errorCode) {
-        _turnstileToken = null;
-
-        // BUGFIX Race Condition (mehrfach überlappende Fehler):
-        //   Wenn Cloudflare onTurnstileError mehrfach kurz hintereinander feuert
-        //   (z.B. bei 600010), lief vorher bei JEDEM Aufruf turnstile.remove()
-        //   UND ein neuer setTimeout-Retry los — unabhängig davon, ob das Widget
-        //   tatsächlich noch existierte oder der vorherige Retry noch aussteht.
-        //   Das führte zu "Nothing to reset/remove found for provided container"
-        //   (zweiter remove() auf ein bereits entferntes Widget) und zu doppelten,
-        //   parallel laufenden render()-Aufrufen auf denselben Container.
-        //   Fix: Zustand VOR dem Reset merken (hadRenderedWidget), und einen
-        //   evtl. bereits laufenden Retry-Timer canceln, bevor ein neuer geplant
-        //   wird (Debounce statt Stapeln).
-        const hadRenderedWidget = _turnstileRendered;
-        _turnstileRendered = false;
-
-        if (_turnstileRetryTimeoutId !== null) {
-            clearTimeout(_turnstileRetryTimeoutId);
-            _turnstileRetryTimeoutId = null;
-        }
-
-        // Scan-Button deaktivieren – ohne Token darf kein Scan starten
-        const scanBtn = document.getElementById('scan-btn');
-        if (scanBtn) {
-            scanBtn.disabled = true;
-        }
-
-        // Bei einem Fehler braucht der Nutzer ein neues Captcha → Widget
-        // (falls zuvor durch onTurnstileSuccess ausgeblendet) wieder zeigen.
-        const wrapper = document.getElementById('turnstile-wrapper');
-        if (wrapper) wrapper.classList.remove('hidden');
-
-        // Nur loggen auf debug-Level, kein console.error() → kein Log-Flooding
-        console.warn(`[Turnstile] Widget-Fehler (Code: ${errorCode || 'unbekannt'})`);
-
-        // Nutzer informieren: nur wenn Scan aktiv versucht wurde ODER Widget bereits
-        // sichtbar war (Nutzer sieht das Widget und erwartet dass es funktioniert)
-        const widgetVisible = wrapper && !wrapper.classList.contains('hidden');
-
-        // BUGFIX Endlos-Retry:
-        //   Ohne Obergrenze konnte sich bei dauerhaften Problemen (z.B. Netzwerk,
-        //   Hosting-/CSP-Fehlkonfiguration) alle 2s ein neuer Render-Versuch
-        //   aufbauen, der wieder scheitert → erneute Endlosschleife, nur mit
-        //   2s-Abstand statt sofort. Nach TURNSTILE_MAX_AUTO_RETRIES wird
-        //   abgebrochen und der Nutzer um manuellen Reload gebeten.
-        _turnstileErrorRetries++;
-        const retriesExhausted = _turnstileErrorRetries > TURNSTILE_MAX_AUTO_RETRIES;
-
-        if (_scanAttempted || widgetVisible) {
-            setScanError(
-                retriesExhausted
-                    ? (currentLang === 'de'
-                        ? 'Sicherheitsprüfung fehlgeschlagen. Bitte lade die Seite neu.'
-                        : 'Security check failed. Please reload the page.')
-                    : (currentLang === 'de'
-                        ? 'Sicherheitsprüfung wird neu geladen, bitte einen Moment warten …'
-                        : 'Security check is reloading, please wait a moment …')
-            );
-        }
-
-        // BUGFIX postMessage-Origin-Fehler:
-        //   widgetEl.innerHTML = '' riss das iframe manuell aus dem DOM, ohne dass
-        //   Cloudflare das mitbekam. Cloudflares internes Polling hielt weiterhin
-        //   eine Referenz auf das jetzt verwaiste Widget-Fenster und versuchte
-        //   per postMessage dorthin zu senden → "target origin does not match
-        //   recipient window's origin" + "Cannot find Widget cf-chl-widget-xxxxx".
-        //   Fix: korrekte Cloudflare-API turnstile.remove() nutzen, die das Widget
-        //   auch intern bei Cloudflare sauber deregistriert. Nur aufrufen, wenn
-        //   zum Zeitpunkt des Fehlers tatsächlich ein Widget gerendert war.
-        // WICHTIG: remove() ebenfalls mit der _turnstileWidgetId aufrufen
-        if (window.turnstile && hadRenderedWidget && _turnstileWidgetId !== null) {
-            try { window.turnstile.remove(_turnstileWidgetId); } catch (_) {}
-        }
-
-        // Automatischer Recovery-Versuch nach kurzer Verzögerung (statt erst
-        // beim nächsten View-Wechsel): verhindert, dass Free-Tier-Nutzer nach
-        // einem 300030-Fehler die Seite manuell neu laden müssen. Verzögerung
-        // vermeidet ein zu schnelles Re-Render in dasselbe Fehlerfenster hinein.
-        // Bricht ab, sobald TURNSTILE_MAX_AUTO_RETRIES überschritten ist.
-        // Debounced über _turnstileRetryTimeoutId (siehe oben).
-        if (!retriesExhausted) {
-            _turnstileRetryTimeoutId = setTimeout(() => {
-                _turnstileRetryTimeoutId = null;
-                if (!_turnstileRendered && wrapper && !wrapper.classList.contains('hidden')) {
-                    _renderTurnstileWidget();
-                    if (scanBtn) {
-                        scanBtn.disabled = !_turnstileToken;
-                    }
-                }
-            }, 2000);
-        }
-    }
-
-    // NEU: Variable zum Speichern der ID
-    let _turnstileWidgetId = null;
-
-    function _renderTurnstileWidget() {
-        if (_turnstileRendered || !window.turnstile) return;
-        _turnstileRendered = true;
-        try {
-            // WICHTIG: Rückgabewert (Widget-ID) speichern!
-            _turnstileWidgetId = window.turnstile.render('#turnstile-widget', {
-                sitekey:            '0x4AAAAAADmDM0vIb4pbgSD9',
-                theme:              'auto',
-                callback:           onTurnstileSuccess,
-                'expired-callback': onTurnstileExpired,
-                'error-callback':   onTurnstileError,
-            });
-        } catch (err) {
-            console.warn('[Turnstile] render() fehlgeschlagen:', err);
-            _turnstileRendered = false; 
-        }
-    }
-
-    function _resetTurnstileWidget() {
-        _turnstileToken = null;
-        if (_turnstileRetryTimeoutId !== null) {
-            clearTimeout(_turnstileRetryTimeoutId);
-            _turnstileRetryTimeoutId = null;
-        }
-        // WICHTIG: reset() mit der _turnstileWidgetId aufrufen
-        if (!window.turnstile || !_turnstileRendered || _turnstileWidgetId === null) return;
-        try { window.turnstile.reset(_turnstileWidgetId); } catch (_) {}
-        _turnstileRendered = false; 
-    }
-
-    function _showTurnstileIfNeeded() {
-        const licenseKey = localStorage.getItem('focus_license_key') || '';
-        const wrapper    = document.getElementById('turnstile-wrapper');
-        if (!wrapper) return;
-
-        if (!licenseKey) {
-            // Free-Tier: Widget anzeigen
-            wrapper.classList.remove('hidden');
-            // Nur rendern wenn Cloudflare-Skript bereits vollständig geladen ist.
-            // Falls nicht: onTurnstileLoad() wird später aufgerufen und holt das nach.
-            if (_turnstileReady && !_turnstileRendered) {
-                _renderTurnstileWidget();
-            }
-        } else {
-            // Paid-Tier: Widget ausblenden
-            wrapper.classList.add('hidden');
-            _turnstileToken = null;
-        }
-    }
 
     async function startAIScan() {
         if (!_scanImageBase64) { setScanError(t('scan_no_image')); return; }
 
-        _scanAttempted = true; // Ab jetzt darf onTurnstileError eine Meldung zeigen
+        _scanAttempted = true;
 
         // Lizenzschlüssel und Free-Trial-Logik
         const licenseKey = localStorage.getItem('focus_license_key') || '';
@@ -2188,13 +1962,9 @@ You have the right to object at any time to the processing of personal data conc
                 openSettingsModal();
                 return;
             }
-            // Turnstile-Token prüfen (nur Free-Tier)
-            if (!_turnstileToken) {
-                setScanError(t('scan_error_turnstile_required'));
-                _showTurnstileIfNeeded();
-                return;
-            }
         }
+    
+        
 
         const loader     = document.getElementById('scan-loader');
         const loaderText = document.getElementById('scan-loader-text');
@@ -2209,10 +1979,9 @@ You have the right to object at any time to the processing of personal data conc
             if (loaderText) loaderText.textContent = t('scan_loader_ai');
 
             const requestBody = { image: _scanImageBase64 };
-            // Turnstile-Token nur für Free-Tier mitsenden
-            if (!licenseKey && _turnstileToken) {
-                requestBody.turnstileToken = _turnstileToken;
-            }
+            // Honeypot-Wert mitsenden (für Bot-Erkennung im Backend)
+            const trapValue = (document.getElementById('hp-email') || {}).value || '';
+            if (trapValue) requestBody.trap = trapValue;
 
             const response = await fetch('/api/scan', {
                 method: 'POST',
@@ -2230,18 +1999,6 @@ You have the right to object at any time to the processing of personal data conc
                 // HTTP 429 → Scan-Limit erreicht
                 if (response.status === 429) {
                     throw new Error('LIMIT_REACHED');
-                }
-
-                // HTTP 403 + turnstile → Turnstile-Fehler
-                if (response.status === 403 && errData.turnstile) {
-                    // Token ist verbraucht/ungültig → zurücksetzen, Widget neu rendern
-                    _turnstileToken = null;
-                    const turnstileWrapper = document.getElementById('turnstile-wrapper');
-                    if (turnstileWrapper) turnstileWrapper.classList.remove('hidden');
-                    if (window.turnstile) {
-                        _resetTurnstileWidget();
-                    }
-                    throw new Error(t('scan_error_turnstile_failed'));
                 }
 
                 // HTTP 403 → Temporärer Cooldown (z.B. nach Policy-Verstoß)
@@ -2287,16 +2044,7 @@ You have the right to object at any time to the processing of personal data conc
             if (placeholder) { placeholder.classList.remove('hidden'); }
             scanBtn.disabled = true;
 
-            // Token ist Single-Use → nach erfolgreichem Scan zurücksetzen
-            _turnstileToken  = null;
             _scanAttempted   = false;
-            if (window.turnstile) {
-                _resetTurnstileWidget();
-            }
-            // Für den nächsten Scan wird ggf. wieder ein Token benötigt (Free-Tier) →
-            // _showTurnstileIfNeeded() entscheidet anhand des Lizenzstatus neu, ob
-            // das Widget sichtbar sein soll.
-            _showTurnstileIfNeeded();
 
             // Scan-Zähler: bevorzugt echten Stand vom Backend übernehmen
             if (data.usage && data.usage.current) {
@@ -3191,27 +2939,5 @@ You have the right to object at any time to the processing of personal data conc
     }
     </script>
 
-    <script>
-        window.onloadTurnstileCallback = function () {
-            console.log("✅ Turnstile API ist bereit.");
-            // Hier erst renderst du das Widget
-            _renderTurnstileWidget();
-        };
-
-        function _renderTurnstileWidget() {
-            if (_turnstileRendered) return;
-            
-            try {
-                _turnstileWidgetId = turnstile.render('#turnstile-widget', {
-                    sitekey: '0x4AAAAAADmDM0vIb4pbgSD9',
-                    callback: onTurnstileSuccess,
-                    // ... restliche config
-                });
-                _turnstileRendered = true;
-            } catch (e) {
-                console.error("❌ Render-Fehler:", e);
-            }
-        }
-    </script>
 </body>
 </html>
